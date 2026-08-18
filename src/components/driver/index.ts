@@ -11,3 +11,4 @@ export { RouteCompleteCard, type RouteCompleteCardProps } from './RouteCompleteC
 export { DriverMap, type DriverMapProps } from './DriverMap';
 export { DriverDialog, type DriverDialogProps } from './DriverDialog';
 export { NavigateLink, type NavigateLinkProps } from './NavigateLink';
+export { splitFailureNotes, type SplitNotes } from './notes';

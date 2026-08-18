@@ -4,7 +4,7 @@ export { DispatchScreen } from './DispatchScreen';
 export { DispatchPanel, type DispatchPanelProps } from './DispatchPanel';
 export { PanelHeader, type PanelHeaderProps } from './PanelHeader';
 export { DriverRoutes, type DriverRoutesProps } from './DriverRoutes';
-export { StopListItem, type StopListItemProps } from './StopListItem';
+export { StopListItem, type StopListItemProps, type InsertionSide } from './StopListItem';
 export { SortableStopRow, type SortableStopRowProps } from './SortableStopRow';
 export { MoveStopMenu, type MoveStopMenuProps } from './MoveStopMenu';
 export { UnassignedSection, type UnassignedSectionProps } from './UnassignedSection';

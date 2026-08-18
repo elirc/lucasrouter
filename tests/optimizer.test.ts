@@ -5,16 +5,19 @@ import type { Depot, Driver, OptimizeResponse, Route, Stop } from '@/lib/types';
 import {
   ALGORITHM,
   BASELINE_ALGORITHM,
+  ROAD_FACTOR,
   baseline,
   buildDistanceMatrix,
   computeMetrics,
   driveMinutes,
+  estimatedRoadKm,
   haversineKm,
   optimize,
   schedule,
 } from '@/lib/optimizer';
 import { assignStops } from '@/lib/optimizer/assign';
 import { repairTimeWindows } from '@/lib/optimizer/repair';
+import { simulateEtas } from '@/lib/optimizer/schedule';
 import {
   nearestNeighborOrder,
   routeDistance,
@@ -103,7 +106,14 @@ describe('haversineKm', () => {
     expect(haversineKm(CAPITOL, seed.depot)).toBeCloseTo(haversineKm(seed.depot, CAPITOL), 12);
   });
 
-  it('builds a symmetric matrix with a zero diagonal and depot at index 0', () => {
+  it('estimatedRoadKm is haversine x ROAD_FACTOR (1.3)', () => {
+    expect(ROAD_FACTOR).toBe(1.3);
+    const hav = haversineKm(CAPITOL, seed.depot);
+    expect(estimatedRoadKm(CAPITOL, seed.depot)).toBeCloseTo(hav * 1.3, 12);
+    expect(estimatedRoadKm(CAPITOL, CAPITOL)).toBe(0);
+  });
+
+  it('builds a symmetric ROAD-km matrix with a zero diagonal and depot at index 0', () => {
     const pts = [seed.depot, ...seed.stops.slice(0, 5)];
     const m = buildDistanceMatrix(pts);
     expect(m).toHaveLength(6);
@@ -111,14 +121,20 @@ describe('haversineKm', () => {
       expect(m[i][i]).toBe(0);
       for (let j = 0; j < 6; j++) expect(m[i][j]).toBe(m[j][i]);
     }
-    expect(m[0][1]).toBeCloseTo(haversineKm(seed.depot, seed.stops[0]), 12);
+    expect(m[0][1]).toBeCloseTo(estimatedRoadKm(seed.depot, seed.stops[0]), 12);
+    expect(m[0][1]).toBeCloseTo(haversineKm(seed.depot, seed.stops[0]) * ROAD_FACTOR, 12);
   });
 
-  it('applies the 1.3 road factor to drive minutes', () => {
-    // 32 km at 32 km/h = 60 min straight-line, x1.3 = 78.
-    expect(driveMinutes(32, 32)).toBeCloseTo(78, 9);
-    expect(driveMinutes(16)).toBeCloseTo(39, 9); // default speed 32
+  it('drive minutes are road km / speed * 60 (the road factor is already in the km)', () => {
+    // 41.6 road km (= 32 straight-line km x 1.3) at 32 km/h = 78 min.
+    expect(driveMinutes(41.6, 32)).toBeCloseTo(78, 9);
+    expect(driveMinutes(estimatedRoadKm(CAPITOL, seed.depot), 32)).toBeCloseTo(
+      (haversineKm(CAPITOL, seed.depot) * 1.3 * 60) / 32,
+      9,
+    );
+    expect(driveMinutes(16)).toBeCloseTo(30, 9); // default speed 32
     expect(driveMinutes(0)).toBe(0);
+    expect(driveMinutes(10, 0)).toBe(0); // invalid speed -> 0, never Infinity
   });
 });
 
@@ -248,6 +264,23 @@ describe('optimize() on the seed dataset', () => {
     }
   });
 
+  it('reports leg / route km as estimated road km (haversine x 1.3)', () => {
+    const byId = new Map(seed.stops.map((s) => [s.id, s]));
+    const pointOf = (id: string) => (id === 'DEPOT' ? seed.depot : byId.get(id)!);
+    for (const r of res.routes) {
+      let sum = 0;
+      for (const leg of r.legs) {
+        const hav = haversineKm(pointOf(leg.fromId), pointOf(leg.toId));
+        expect(leg.distanceKm).toBeCloseTo(hav * ROAD_FACTOR, 2);
+        expect(leg.distanceKm).toBeGreaterThan(hav); // never shorter than the crow flies
+        // drive minutes are the same road km at 32 km/h, rounded to the minute
+        expect(leg.driveMinutes).toBe(Math.round(((hav * ROAD_FACTOR) / 32) * 60));
+        sum += hav * ROAD_FACTOR;
+      }
+      expect(r.totalDistanceKm).toBeCloseTo(sum, 1);
+    }
+  });
+
   it('metrics.totalDistanceKm equals the sum of route totals', () => {
     const sum = res.routes.reduce((a, r) => a + r.totalDistanceKm, 0);
     expect(Math.abs(res.metrics.totalDistanceKm - sum)).toBeLessThan(0.05);
@@ -265,6 +298,35 @@ describe('optimize() on the seed dataset', () => {
   it('reports non-negative time-window violations (and no more than the baseline)', () => {
     expect(res.metrics.timeWindowViolations).toBeGreaterThanOrEqual(0);
     expect(res.metrics.timeWindowViolations).toBeLessThanOrEqual(base.metrics.timeWindowViolations);
+  });
+
+  it('meets every window on the seed and does not idle mid-route for hours', () => {
+    expect(res.metrics.timeWindowViolations).toBe(0);
+    // Each driver owns one 13:00-15:00 stop, so some waiting is intrinsic to the
+    // data - but the repair pass must push it to the tail instead of parking the
+    // driver at 09:20 with deliverable stops left. Before the later-pass existed
+    // the seed came out at 1136 total minutes / 408 longest.
+    expect(res.metrics.totalMinutes).toBeLessThanOrEqual(1100);
+    expect(res.metrics.longestRouteMinutes).toBeLessThanOrEqual(400);
+
+    const byId = new Map(seed.stops.map((s) => [s.id, s]));
+    for (const r of res.routes) {
+      const driver = seed.drivers.find((d) => d.id === r.driverId)!;
+      const routeStops = r.stopIds.map((id) => byId.get(id)!);
+      const sim = simulateEtas(
+        parseHHMM(driver.shiftStart),
+        routeStops,
+        r.legs.map((l) => l.driveMinutes),
+      );
+      // Every stop WITHOUT a window that comes after a long wait would have been
+      // deliverable before that wait -> the later-pass must have moved it up.
+      // Concretely: no un-windowed stop may be scheduled after a wait > 60 min.
+      let longWaitSeen = false;
+      routeStops.forEach((stop, i) => {
+        if (sim.steps[i].waitMin > 60) longWaitSeen = true;
+        else if (longWaitSeen) expect(stop.timeWindow).toBeDefined();
+      });
+    }
   });
 
   it('is deterministic', () => {
@@ -565,12 +627,77 @@ describe('repairTimeWindows()', () => {
     expect([...repaired.order].sort()).toEqual([1, 2, 3]);
   });
 
-  it('is a no-op when nothing is late', () => {
+  it('pushes a stop that would idle at a closed window to the tail (later pass)', () => {
+    // Three window-free stops in a line north of the depot plus one stop with an
+    // afternoon window sitting right next to the depot, so nearest-neighbour
+    // visits it FIRST at ~08:01 and would then wait until 13:00 with three
+    // deliverable stops still on the van.
+    const win = makeStop('W', TEST_DEPOT.lat + 0.005, TEST_DEPOT.lng, {
+      timeWindow: { start: '13:00', end: '15:00' },
+    });
+    const a = makeStop('A', TEST_DEPOT.lat + 0.01, TEST_DEPOT.lng);
+    const b = makeStop('B', TEST_DEPOT.lat + 0.02, TEST_DEPOT.lng);
+    const c = makeStop('C', TEST_DEPOT.lat + 0.03, TEST_DEPOT.lng);
+    const stops = [win, a, b, c];
+    const matrix = buildDistanceMatrix([TEST_DEPOT, ...stops]);
+    const ctx = { matrix, depotIndex: 0, stops, shiftStartMin: parseHHMM('08:00'), avgSpeedKmh: 32 };
+
+    const distanceOnly = sequenceRoute(matrix, 0, [1, 2, 3, 4]);
+    expect(distanceOnly[0]).toBe(1); // W is visited first by NN + 2-opt
+
+    const legMin = (order: number[]) => {
+      const out: number[] = [];
+      let prev = 0;
+      for (const i of order) {
+        out.push(driveMinutes(matrix[prev][i], 32));
+        prev = i;
+      }
+      out.push(driveMinutes(matrix[prev][0], 32));
+      return out;
+    };
+    const before = simulateEtas(480, distanceOnly.map((i) => stops[i - 1]), legMin(distanceOnly));
+    expect(before.steps[0].waitMin).toBeGreaterThan(200); // idles ~5 h at W
+
+    const repaired = repairTimeWindows(distanceOnly, ctx);
+    expect(repaired.violations).toBe(0);
+    expect([...repaired.order].sort()).toEqual([1, 2, 3, 4]);
+    expect(repaired.order[repaired.order.length - 1]).toBe(1); // W is now last
+    const after = simulateEtas(480, repaired.order.map((i) => stops[i - 1]), legMin(repaired.order));
+    expect(after.depotArrivalMin).toBeLessThan(before.depotArrivalMin);
+    // A, B, C are delivered in the morning; W exactly at its window start.
+    for (let i = 0; i < 3; i++) expect(after.steps[i].arrivalMin).toBeLessThan(parseHHMM('09:00'));
+    expect(after.steps[3].arrivalMin).toBe(parseHHMM('13:00'));
+  });
+
+  it('is a no-op when nothing is late and nobody waits', () => {
     const seed = getSeed();
     const stops = seed.stops.slice(0, 6).map((s) => ({ ...s, timeWindow: undefined }));
     const matrix = buildDistanceMatrix([seed.depot, ...stops]);
     const ctx = { matrix, depotIndex: 0, stops, shiftStartMin: 480, avgSpeedKmh: 32 };
     const order = sequenceRoute(matrix, 0, [1, 2, 3, 4, 5, 6]);
     expect(repairTimeWindows(order, ctx)).toEqual({ order, violations: 0 });
+  });
+
+  it('is deterministic and keeps the stop multiset on every seed route', () => {
+    const seed = getSeed();
+    const matrix = buildDistanceMatrix([seed.depot, ...seed.stops]);
+    const { assignments } = assignStops(seed.depot, seed.drivers, seed.stops);
+    const indexOf = new Map(seed.stops.map((s, i) => [s.id, i + 1]));
+    for (const driver of seed.drivers) {
+      const idx = assignments[driver.id].map((id) => indexOf.get(id)!);
+      const ctx = {
+        matrix,
+        depotIndex: 0,
+        stops: seed.stops,
+        shiftStartMin: parseHHMM(driver.shiftStart),
+        avgSpeedKmh: 32,
+      };
+      const order = sequenceRoute(matrix, 0, idx);
+      const r1 = repairTimeWindows(order, ctx);
+      const r2 = repairTimeWindows(order, ctx);
+      expect(r1).toEqual(r2);
+      expect([...r1.order].sort()).toEqual([...order].sort());
+      expect(r1.violations).toBe(0);
+    }
   });
 });

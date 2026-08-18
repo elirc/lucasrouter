@@ -10,13 +10,15 @@ The routing algorithm is a **swappable placeholder** (`nn-2opt-v1`: nearest-neig
 
 ## Screenshots
 
-| Landing | Dispatcher (mobile) | Driver (mobile) |
-| --- | --- | --- |
-| _screenshot placeholder_ | _screenshot placeholder_ | _screenshot placeholder_ |
+Captured at 375×812 (2×) and 1366×850 by the smoke harness (`pnpm smoke`, see below); the files live in [`docs/screenshots/`](docs/screenshots/).
+
+| Landing | Dispatcher — optimized map | Dispatcher — sheet with metrics | Driver — next stop |
+| --- | --- | --- | --- |
+| ![Landing page on a phone](docs/screenshots/landing-mobile.png) | ![Dispatcher map with three coloured routes](docs/screenshots/dispatch-mobile-optimized.png) | ![Bottom sheet showing before/after metrics and route cards](docs/screenshots/dispatch-mobile-sheet.png) | ![Driver view with the Next Stop card, map and route list](docs/screenshots/driver-mobile.png) |
 
 | Dispatcher (desktop) |
 | --- |
-| _screenshot placeholder_ |
+| ![Desktop dispatcher: map with legend on the left, metrics and route lists on the right](docs/screenshots/dispatch-desktop.png) |
 
 ## Screens
 
@@ -26,7 +28,7 @@ The routing algorithm is a **swappable placeholder** (`nn-2opt-v1`: nearest-neig
 | `/dispatch` | Map of all stops + depot; **Optimize routes**; Before/After metrics; per-driver route cards; drag (desktop) or ⋯ menu (mobile) to move stops between drivers; legend; reset / export |
 | `/driver` | Driver picker (remembers your last choice) |
 | `/driver/[id]` | Phone experience: progress header, **Next Stop** card with Delivered / Failed / Navigate, focused map of the current leg, ordered stop list, "Route complete" summary |
-| `POST /api/optimize` | `OptimizeRequest → OptimizeResponse` (zod-validated) — **the algorithm seam** |
+| `POST /api/optimize` | `OptimizeRequest → OptimizeResponse` (zod-validated: ≤ 1000 stops, ≤ 50 drivers, unique ids, `400 { error, issues }` otherwise) — **the algorithm seam** |
 | `GET /api/seed` | `{ depot, drivers, stops }` mock data |
 | `GET /api/health` | `{ ok, algorithm, version }` |
 
@@ -42,15 +44,28 @@ pnpm dev          # http://localhost:3000
 Other scripts:
 
 ```bash
-pnpm build        # production build (zero TS / ESLint errors is the gate)
-pnpm start        # serve the production build
-pnpm test         # vitest: optimizer + time utilities
-pnpm lint         # eslint .
+pnpm verify       # typecheck + lint + test — the real gate; run before pushing
 pnpm typecheck    # tsc --noEmit
+pnpm lint         # eslint . --max-warnings=0 (Next 16 no longer lints inside `next build`)
+pnpm test         # vitest: optimizer, store, /api routes, polyline decoder, time utilities
+pnpm build        # production build — gates TypeScript (ESLint is gated by `pnpm lint`)
+pnpm start        # serve the production build
+pnpm smoke [url]  # headless end-to-end smoke run against a running server (see below)
+pnpm generate-icons     # regenerate public/icons/*.png (dependency-free)
 pnpm precompute-paths   # (optional, one-off) refresh src/data/paths.json from the OSRM demo server
 ```
 
-The demo state (optimized routes, delivery progress, last driver) lives in `localStorage` under `routeiq-v1`; use **Reset demo** in the dispatcher (or clear site data) to start over.
+The demo state (optimized routes, delivery progress, last driver) lives in `localStorage` under `routeiq-v1` and is kept in sync between open tabs on the same device (a driver's "Delivered" shows up in the dispatcher tab); use **Reset demo** in the dispatcher (or clear site data) to start over. A corrupt or blocked `localStorage` never blocks the app — it starts from defaults.
+
+### End-to-end smoke run
+
+`scripts/smoke-e2e.mjs` drives a local **Chrome or Edge** through the acceptance criteria with `puppeteer-core` (no browser download): 45 grey markers + depot within 2 s of navigation start, optimize → three routes with before/after metrics, reassign via the ⋯ menu, the driver flow at 375×812 (Delivered advances, Failed with a reason, progress survives a reload, no horizontal scroll), desktop dispatch with drag handles, legend / export / reset, the JSON API (`400` on invalid input), only own-origin + OSM-tile network hosts, and no console errors — 41 checks. It writes screenshots to `e2e-screens/` (git-ignored).
+
+```bash
+pnpm build && pnpm start          # in one terminal (port 3000)
+pnpm smoke                        # in another; or: pnpm smoke http://localhost:3111
+# CHROME_PATH=/path/to/chrome pnpm smoke   # if Chrome/Edge is not in a standard location
+```
 
 ## Deploy to Vercel
 
@@ -60,7 +75,7 @@ The demo state (optimized routes, delivery progress, last driver) lives in `loca
 
 Or, from the CLI: `npx vercel` (accept the defaults) and `npx vercel --prod`.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FYOUR_ORG%2FYOUR_REPO)
+(There is no one-click "Deploy with Vercel" button because this repository has no public remote yet; importing the repo in Vercel or running `npx vercel` is the same two-minute job.)
 
 ## Swapping in the real algorithm
 
@@ -71,7 +86,7 @@ Everything the UI needs is in the `OptimizeRequest → OptimizeResponse` contrac
 
 Full contract, JSON example, invariants and the Python skeleton: [`docs/ALGORITHM_INTEGRATION.md`](docs/ALGORITHM_INTEGRATION.md).
 
-Manual reassignment in the dispatcher only re-runs `schedule()` (legs/ETAs/metrics), so it keeps working with any algorithm.
+Manual reassignment in the dispatcher only re-runs `schedule()` (legs/ETAs/metrics), so it keeps working with any algorithm — and it works before the first optimisation too (the first move bootstraps an empty plan). Only the **Optimize** button on `/dispatch` and the **Optimize now** button on an un-optimized `/driver/[id]` call `/api/optimize`; **Reset demo** clears the plan without re-optimizing.
 
 ## Project structure
 
@@ -92,31 +107,34 @@ src/
   lib/
     types.ts                  domain model + API contract
     optimizer/                index (optimize/baseline), distance, assign, sequence, repair, schedule, baseline
-    time.ts, geo.ts, cn.ts
-  store/useAppStore.ts        zustand store, persisted to localStorage (routeiq-v1)
+    time.ts, geo.ts, color.ts (WCAG-aware onColor/contrast), cn.ts
+  store/useAppStore.ts        zustand store, persisted to localStorage (routeiq-v1), tolerant storage + cross-tab sync
   data/                       depot.json, drivers.json, stops.json, paths.json (precomputed road polylines), index.ts, paths.ts
 scripts/
+  smoke-e2e.mjs               puppeteer-core end-to-end smoke run (`pnpm smoke`)
   precompute-paths.ts         one-off OSRM fetch → src/data/paths.json (never called at runtime)
-  generate-icons.mjs          dependency-free PNG icon generator
-tests/                        vitest (optimizer, time)
-docs/ALGORITHM_INTEGRATION.md
-public/                       sw.js, icons/
+  generate-icons.mjs          dependency-free PNG icon generator (any + maskable variants)
+tests/                        vitest (optimizer, store, api-optimize, paths, time)
+docs/
+  ALGORITHM_INTEGRATION.md    contract, limits, example, Python skeleton
+  screenshots/                the images above
+public/                       sw.js, icons/ (icon-192/512, icon-maskable-192/512, apple-touch-icon)
 DECISIONS.md                  every assumption made where the spec was silent
 ```
 
 ## How the placeholder optimizer works
 
-1. Haversine distance matrix over depot + stops; drive time = km / 32 km/h × 60 × 1.3 road factor.
+1. Distance matrix over depot + stops using **estimated road km = haversine × 1.3**; drive time = road km / 32 km/h × 60. Every km the app reports (legs, routes, metrics) is that road estimate.
 2. Assign stops to drivers with angle-seeded k-means, then rebalance for capacity and a ≤ 3 stop-count spread.
 3. Sequence each route with nearest-neighbour + 2-opt.
-4. Repair time-window violations by pulling late stops earlier.
-5. Schedule: legs, ETAs (waiting for a window to open is allowed and counted), totals, metrics.
-6. `baseline()` — round-robin in file order, unsequenced — provides the "before" numbers.
+4. Time-window repair: pull **late** stops earlier while violations decrease, and push **idle** waits to the tail — while a stop waits for its window to open, relocate single stops so the driver gets back to the depot earlier (or as early with everyone served earlier) without adding violations. Skipped when `respectTimeWindows: false`.
+5. Schedule: legs, ETAs (waiting for a window to open is allowed and counted, arriving late is a violation), totals, metrics.
+6. `baseline()` — round-robin in file order, unsequenced, same distance model — provides the "before" numbers.
 
-On the seed data: **273 km → 123 km**, 6 → 0 time-window violations, in ~20 ms.
+On the seed data: **355 km → 175 km (−51 %)**, 20 h 24 m → 17 h 31 m of total route time (−14 %), longest route 9 h 25 m → 6 h 33 m, 6 → 0 time-window violations, in a few tens of milliseconds (~25–90 ms; the idle-repair pass is the cost).
 
 ## Notes
 
 - Map tiles come from `tile.openstreetmap.org` under the OSM tile usage policy (attribution included, default zoom levels).
 - Road-shaped route lines are drawn from `src/data/paths.json`, precomputed once from the public OSRM demo server; the app itself never calls OSRM.
-- PWA: `manifest.webmanifest` + a minimal service worker (installable; offline caching intentionally minimal).
+- PWA: `manifest.webmanifest` (with dedicated maskable icons) + a minimal service worker (installable; offline caching intentionally minimal).

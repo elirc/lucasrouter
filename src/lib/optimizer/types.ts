@@ -11,7 +11,8 @@ export interface Point {
 }
 
 /**
- * Symmetric distance matrix in kilometres. By convention index 0 is the depot
+ * Symmetric matrix of estimated ROAD km (haversine x ROAD_FACTOR, see
+ * `buildDistanceMatrix`). By convention index 0 is the depot
  * and index `i >= 1` is `stops[i - 1]` of whatever stop list the matrix was
  * built from (see `buildDistanceMatrix`).
  */

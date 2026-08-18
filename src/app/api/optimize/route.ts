@@ -33,8 +33,19 @@ const longitude = z.number().min(-180).max(180);
 
 const timeWindowSchema = z.object({ start: hhmm, end: hhmm });
 
+/**
+ * Request size caps. The placeholder optimizer builds a dense n x n matrix and
+ * runs O(n^2)-O(n^3) local search per driver, and the endpoint is public, so a
+ * request must not be able to allocate gigabytes or run for minutes. 1000 stops
+ * / 50 drivers is far beyond the demo (45 / 3) and any single depot's day.
+ * (Not exported: Next only allows HTTP-method / segment-config exports here.)
+ */
+const MAX_STOPS = 1000;
+const MAX_DRIVERS = 50;
+
 const stopSchema = z.object({
-  id: z.string().min(1),
+  // 'DEPOT' is reserved: RouteLeg.fromId / toId use it for the depot endpoints.
+  id: z.string().min(1).refine((v) => v !== 'DEPOT', { message: "Stop id 'DEPOT' is reserved" }),
   address: z.string(),
   lat: latitude,
   lng: longitude,
@@ -71,12 +82,45 @@ const optionsSchema = z.object({
   avgSpeedKmh: z.number().positive().optional(),
 });
 
-const optimizeRequestSchema = z.object({
-  depot: depotSchema,
-  drivers: z.array(driverSchema),
-  stops: z.array(stopSchema),
-  options: optionsSchema.optional(),
-});
+/** Ids that occur more than once, in first-seen order (for error messages). */
+function duplicateIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) dupes.add(id);
+    seen.add(id);
+  }
+  return [...dupes];
+}
+
+const optimizeRequestSchema = z
+  .object({
+    depot: depotSchema,
+    drivers: z.array(driverSchema).max(MAX_DRIVERS, `At most ${MAX_DRIVERS} drivers per request`),
+    stops: z.array(stopSchema).max(MAX_STOPS, `At most ${MAX_STOPS} stops per request`),
+    options: optionsSchema.optional(),
+  })
+  // Ids must be unique: the optimizer's "every stop exactly once" invariant and
+  // the UI's id-keyed lookups (etaByStopId, stops-by-id) both assume it, and a
+  // duplicate would otherwise be silently dropped or planned twice.
+  .superRefine((req, ctx) => {
+    const dupStops = duplicateIds(req.stops.map((s) => s.id));
+    if (dupStops.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['stops'],
+        message: `Duplicate stop ids: ${dupStops.slice(0, 5).join(', ')}${dupStops.length > 5 ? ', ...' : ''}`,
+      });
+    }
+    const dupDrivers = duplicateIds(req.drivers.map((d) => d.id));
+    if (dupDrivers.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['drivers'],
+        message: `Duplicate driver ids: ${dupDrivers.slice(0, 5).join(', ')}${dupDrivers.length > 5 ? ', ...' : ''}`,
+      });
+    }
+  });
 
 /** Compact issue shape returned to clients on 400. */
 interface ApiIssue {

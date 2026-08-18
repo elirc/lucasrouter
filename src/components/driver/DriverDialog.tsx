@@ -22,14 +22,18 @@ const FOCUSABLE =
 /**
  * Lightweight modal used by the driver app (fail-reason picker, stop details).
  *
- * - `fixed inset-0 z-50` with a dimmed backdrop; renders as a bottom sheet
- *   that is capped to the 480px phone column so it lines up with the page.
- * - `role="dialog" aria-modal` labelled by the heading.
- * - Escape and backdrop click close it.
+ * - Native `<dialog>` opened with `showModal()`: it lives in the top layer,
+ *   everything behind it is inert for pointer, keyboard AND assistive tech,
+ *   and Escape arrives as a `cancel` event. Rendered as a bottom sheet capped
+ *   to the 480px phone column so it lines up with the page.
+ * - `aria-modal` + labelled by the heading; backdrop click closes.
  * - On open, focus moves to the first `[data-autofocus]` element (or the
- *   first focusable control); Tab is trapped inside; on close, focus returns
- *   to whatever was focused before.
- * - Body scroll is locked while open.
+ *   first focusable control); Tab wraps inside the panel; on close, focus
+ *   returns to whatever was focused before (when it still exists).
+ * - The page behind is scroll-locked with the `position: fixed` body
+ *   technique (the only one iOS Safari honours; `overflow: hidden` alone lets
+ *   the page rubber-band and jump), and the document scrollbar track is kept
+ *   so the centred column does not shift on desktop.
  *
  * The panel is unmounted when `open` is false so all of the above is simply
  * mount/unmount work.
@@ -39,19 +43,64 @@ export function DriverDialog(props: DriverDialogProps) {
   return <DialogPanel {...props} />;
 }
 
+/**
+ * Freeze document scrolling while a modal is open and return the undo.
+ * Pins the body at the current scroll offset (works on iOS, unlike
+ * `overflow: hidden`), keeps a scrollbar track on desktop so nothing
+ * re-centres, and restores the scroll position on unlock.
+ */
+function lockBodyScroll(): () => void {
+  const body = document.body;
+  const html = document.documentElement;
+  const scrollY = window.scrollY;
+  const scrollbarGap = window.innerWidth - html.clientWidth;
+  const prev = {
+    position: body.style.position,
+    top: body.style.top,
+    left: body.style.left,
+    right: body.style.right,
+    width: body.style.width,
+    htmlOverflowY: html.style.overflowY,
+  };
+
+  body.style.position = 'fixed';
+  body.style.top = `-${scrollY}px`;
+  body.style.left = '0';
+  body.style.right = '0';
+  body.style.width = '100%';
+  if (scrollbarGap > 0) html.style.overflowY = 'scroll';
+
+  return () => {
+    body.style.position = prev.position;
+    body.style.top = prev.top;
+    body.style.left = prev.left;
+    body.style.right = prev.right;
+    body.style.width = prev.width;
+    html.style.overflowY = prev.htmlOverflowY;
+    window.scrollTo(0, scrollY);
+  };
+}
+
 function DialogPanel({ onClose, title, description, children, className }: DriverDialogProps) {
   const titleId = useId();
   const descId = useId();
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  // Keep the latest onClose in a ref so the document listener never goes stale.
+  // Keep the latest onClose in a ref so the native listeners never go stale.
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  // Focus management + Escape + scroll lock (mount/unmount).
+  // Open as a modal + focus management + Escape + scroll lock (mount/unmount).
   useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    // Top layer + inert background + native focus containment.
+    if (!dialog.open) dialog.showModal();
+
     const panel = panelRef.current;
     const target =
       panel?.querySelector<HTMLElement>('[data-autofocus]') ??
@@ -60,28 +109,36 @@ function DialogPanel({ onClose, title, description, children, className }: Drive
     // Defer one frame so the slide-in animation has started and layout is final.
     const raf = requestAnimationFrame(() => target?.focus({ preventScroll: true }));
 
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onCloseRef.current();
-      }
+    // Escape → `cancel`. We keep ownership of the open state (the parent
+    // unmounts us) instead of letting the dialog close itself; if the browser
+    // refuses the preventDefault (Chrome's close-watcher rules) the following
+    // `close` event still routes to onClose.
+    const onCancel = (e: Event) => {
+      e.preventDefault();
+      onCloseRef.current();
     };
-    document.addEventListener('keydown', onKey);
+    const onNativeClose = () => onCloseRef.current();
+    dialog.addEventListener('cancel', onCancel);
+    dialog.addEventListener('close', onNativeClose);
 
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlockScroll = lockBodyScroll();
 
     return () => {
       cancelAnimationFrame(raf);
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
+      dialog.removeEventListener('cancel', onCancel);
+      dialog.removeEventListener('close', onNativeClose);
+      unlockScroll();
+      // Removing an open modal dialog from the DOM drops it from the top layer;
+      // no close() needed. Return focus if the opener still exists (after
+      // Delivered/Failed the parent moves focus to the new card instead).
       if (previouslyFocused && previouslyFocused.isConnected) {
         previouslyFocused.focus({ preventScroll: true });
       }
     };
   }, []);
 
-  // Minimal Tab trap: wrap focus at either end of the panel.
+  // Tab wrap inside the panel (the native modal already keeps focus out of
+  // the page; this just avoids a detour through the browser chrome).
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Tab' || !panelRef.current) return;
     const nodes = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
@@ -104,50 +161,61 @@ function DialogPanel({ onClose, title, description, children, className }: Drive
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center">
-      {/* Backdrop */}
+    // The <dialog> itself is a transparent full-viewport container (UA sizing,
+    // padding, border and background reset); its ::backdrop is transparent
+    // because we draw our own animated one below.
+    <dialog
+      ref={dialogRef}
+      aria-modal="true"
+      aria-labelledby={titleId}
+      aria-describedby={description ? descId : undefined}
+      className={cn(
+        'fixed inset-0 z-50 m-0 h-auto max-h-none w-auto max-w-none overflow-visible border-0 bg-transparent p-0 text-slate-900',
+        'focus:outline-none backdrop:bg-transparent',
+      )}
+    >
+      {/* Backdrop: click closes; touch-none stops iOS panning the page from here. */}
       <div
         aria-hidden="true"
         onClick={onClose}
-        className="driver-backdrop-in absolute inset-0 bg-slate-900/45"
+        className="driver-backdrop-in absolute inset-0 touch-none bg-slate-900/45"
       />
-      {/* Panel */}
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={description ? descId : undefined}
-        tabIndex={-1}
-        onKeyDown={onKeyDown}
-        className={cn(
-          'driver-sheet-in relative flex max-h-[88dvh] w-full max-w-[480px] flex-col rounded-t-2xl bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.18)] pb-safe',
-          'focus:outline-none',
-          className,
-        )}
-      >
-        <div className="flex items-start gap-3 px-4 pt-4 pb-2">
-          <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="text-lg font-semibold leading-tight text-slate-900">
-              {title}
-            </h2>
-            {description && (
-              <p id={descId} className="mt-0.5 text-sm text-slate-600">
-                {description}
-              </p>
-            )}
+      {/* Layout layer lets clicks through to the backdrop; only the panel catches them. */}
+      <div className="pointer-events-none absolute inset-0 flex items-end justify-center">
+        {/* Panel */}
+        <div
+          ref={panelRef}
+          tabIndex={-1}
+          onKeyDown={onKeyDown}
+          className={cn(
+            'driver-sheet-in pointer-events-auto relative flex max-h-[88dvh] w-full max-w-[480px] flex-col rounded-t-2xl bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.18)] pb-safe',
+            'focus:outline-none',
+            className,
+          )}
+        >
+          <div className="flex items-start gap-3 px-4 pt-4 pb-2">
+            <div className="min-w-0 flex-1">
+              <h2 id={titleId} className="text-lg font-semibold leading-tight text-slate-900">
+                {title}
+              </h2>
+              {description && (
+                <p id={descId} className="mt-0.5 text-sm text-slate-600">
+                  {description}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="-mt-1 -mr-2 flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
+            >
+              <X className="size-5" aria-hidden="true" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="-mt-1 -mr-2 flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
-          >
-            <X className="size-5" aria-hidden="true" />
-          </button>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">{children}</div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">{children}</div>
       </div>
-    </div>
+    </dialog>
   );
 }

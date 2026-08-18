@@ -4,6 +4,7 @@ import { Check, X } from 'lucide-react';
 import type { CSSProperties, ReactNode } from 'react';
 
 import { cn } from '@/lib/cn';
+import { onColor } from '@/lib/color';
 import { shortAddress } from '@/lib/geo';
 import { formatWindow, to12h } from '@/lib/time';
 import type { Stop } from '@/lib/types';
@@ -57,15 +58,19 @@ export function StopRow({
   const isDone = state === 'done' || stop.status !== 'pending';
   const isCurrent = state === 'current';
 
+  // Sequence circle: driver colour background with a foreground picked for
+  // AA contrast (white on the orange/green seed colours is < 3:1, so slate-900
+  // there). Delivered/failed keep a white icon on solid green/red (>= 3:1,
+  // the non-text minimum; the status is also in the row's accessible name).
   const circle = (
     <span
       aria-hidden="true"
       className={cn(
-        'flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white tabular-nums',
-        stop.status === 'failed' && 'bg-red-600',
-        stop.status === 'delivered' && 'bg-emerald-600',
+        'flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
+        stop.status === 'failed' && 'bg-red-600 text-white',
+        stop.status === 'delivered' && 'bg-emerald-600 text-white',
       )}
-      style={stop.status === 'pending' ? { backgroundColor: accent } : undefined}
+      style={stop.status === 'pending' ? { backgroundColor: accent, color: onColor(accent) } : undefined}
     >
       {stop.status === 'delivered' ? (
         <Check className="size-4" strokeWidth={3} />
@@ -81,7 +86,14 @@ export function StopRow({
     <>
       {circle}
       <span className="min-w-0 flex-1 text-left">
-        <span className="block truncate text-sm font-medium text-slate-900">{shortAddress(stop.address)}</span>
+        <span
+          className={cn(
+            'block truncate text-sm font-medium',
+            isDone ? 'text-slate-600 line-through decoration-slate-400' : 'text-slate-900',
+          )}
+        >
+          {shortAddress(stop.address)}
+        </span>
         {(!compact || stop.priority !== 'standard') && (
           <span className="flex min-w-0 items-center gap-1.5">
             {stop.priority !== 'standard' && <PriorityBadge priority={stop.priority} size="sm" />}
@@ -95,7 +107,12 @@ export function StopRow({
         )}
       </span>
       {eta && (
-        <span className="shrink-0 self-start pt-0.5 text-right text-sm text-slate-700 tabular-nums">
+        <span
+          className={cn(
+            'shrink-0 self-start pt-0.5 text-right text-sm tabular-nums',
+            isDone ? 'text-slate-500' : 'text-slate-700',
+          )}
+        >
           {to12h(eta)}
         </span>
       )}
@@ -113,10 +130,12 @@ export function StopRow({
     .filter(Boolean)
     .join(', ');
 
+  // Done rows are "dimmed" with quieter greys + line-through rather than an
+  // opacity drop: the row stays tappable, so its text must still meet 4.5:1
+  // (slate-500 on white = 4.8:1; slate-500 at 60% opacity was 2.3:1).
   const outerClass = cn(
     'relative flex w-full min-h-[56px] items-center gap-3 bg-white text-left transition-colors',
     compact ? 'px-3 py-1.5' : 'px-3 py-2',
-    isDone && 'opacity-60',
     className,
   );
   // "Current" ring uses the driver color, which is dynamic → inline box-shadow.

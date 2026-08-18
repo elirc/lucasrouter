@@ -56,9 +56,9 @@ export function DispatchSkeleton() {
             </div>
           </div>
         </div>
-        {/* Desktop side panel placeholder */}
+        {/* Desktop side panel placeholder (same clamped width as DispatchScreen's aside) */}
         <aside
-          className="hidden w-[420px] shrink-0 border-l border-slate-200 bg-slate-100 p-4 md:block xl:w-[460px]"
+          className="hidden w-[clamp(340px,40vw,460px)] shrink-0 border-l border-slate-200 bg-slate-100 p-4 md:block"
           aria-hidden="true"
         >
           <PanelSkeletonContent />

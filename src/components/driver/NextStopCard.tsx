@@ -1,6 +1,7 @@
 'use client';
 
 import { Check, Clock, MapPin, Package, X } from 'lucide-react';
+import type { Ref } from 'react';
 
 import { Button, Card, PriorityBadge } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -8,6 +9,7 @@ import { formatWindow, parseHHMM, to12h } from '@/lib/time';
 import type { Driver, Stop } from '@/lib/types';
 
 import { NavigateLink } from './NavigateLink';
+import { splitFailureNotes } from './notes';
 
 export interface NextStopCardProps {
   stop: Stop;
@@ -19,6 +21,11 @@ export interface NextStopCardProps {
   eta?: string;
   onDelivered: () => void;
   onFailed: () => void;
+  /**
+   * Ref to the address heading (`tabIndex={-1}`) so the parent can move
+   * keyboard focus onto the new card after Delivered/Failed re-mounts it.
+   */
+  headingRef?: Ref<HTMLHeadingElement>;
   className?: string;
 }
 
@@ -46,9 +53,12 @@ export function NextStopCard({
   eta,
   onDelivered,
   onFailed,
+  headingRef,
   className,
 }: NextStopCardProps) {
   const late = isEtaLate(eta, stop.timeWindow);
+  // A stale "<reason> · " prefix (failed → undone) is not a delivery note.
+  const { note } = splitFailureNotes(stop.notes);
   return (
     <Card
       className={cn('driver-fade-in overflow-hidden p-4', className)}
@@ -67,7 +77,9 @@ export function NextStopCard({
       {/* Address + recipient */}
       <h2
         id={`next-stop-${stop.id}`}
-        className="mt-1.5 text-xl font-semibold leading-tight text-slate-900 text-balance"
+        ref={headingRef}
+        tabIndex={-1}
+        className="mt-1.5 rounded-sm text-xl font-semibold leading-tight text-slate-900 text-balance focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2"
       >
         {stop.address}
       </h2>
@@ -101,7 +113,7 @@ export function NextStopCard({
         )}
       </dl>
 
-      {stop.notes && <p className="mt-2 line-clamp-3 text-sm text-slate-600">{stop.notes}</p>}
+      {note && <p className="mt-2 line-clamp-3 text-sm text-slate-600">{note}</p>}
 
       {/* Actions */}
       <div className="mt-4 grid grid-cols-2 gap-3">

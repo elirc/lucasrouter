@@ -40,11 +40,12 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* How it works */}
+      {/* How it works. Contrast rule: slate-600 on the slate-100 page ground
+          (slate-500 is only 4.35:1 there); slate-500 only on white cards. */}
       <section aria-labelledby="how-it-works" className="pb-10">
         <h2
           id="how-it-works"
-          className="text-center text-xs font-semibold tracking-wide text-slate-500 uppercase"
+          className="text-center text-xs font-semibold tracking-wide text-slate-600 uppercase"
         >
           How it works
         </h2>
@@ -70,7 +71,7 @@ export default function HomePage() {
         </ol>
       </section>
 
-      <footer className="border-t border-slate-200 py-6 text-center text-xs text-slate-500">
+      <footer className="border-t border-slate-200 py-6 text-center text-xs text-slate-600">
         Demo — mock data, Madison WI. No accounts, no paid APIs.
       </footer>
     </main>
@@ -122,7 +123,7 @@ function Step({ n, icon, title, text }: { n: number; icon: ReactNode; title: str
       </span>
       <span className="min-w-0">
         <span className="block text-sm font-semibold text-slate-900">
-          <span className="mr-1.5 text-slate-400 tabular-nums">{n}.</span>
+          <span className="mr-1.5 text-slate-500 tabular-nums">{n}.</span>
           {title}
         </span>
         <span className="mt-0.5 block text-sm text-slate-600">{text}</span>

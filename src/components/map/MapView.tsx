@@ -18,6 +18,16 @@ export type FitPadding =
   | [number, number]
   | { topLeft: [number, number]; bottomRight: [number, number] };
 
+/**
+ * Pixels of the map container hidden under page overlays (a bottom sheet, a
+ * floating bar). Marker popups pan into the uncovered part instead of opening
+ * under the overlay. Both edges default to 0.
+ */
+export interface MapViewportInset {
+  bottom?: number;
+  top?: number;
+}
+
 export interface MapViewProps {
   depot: Depot;
   stops: Stop[];
@@ -52,6 +62,11 @@ export interface MapViewProps {
   attributionPosition?: ControlPosition;
   /** Draw direction arrows along routes in dispatch mode. Default true. */
   showDirectionArrows?: boolean;
+  /**
+   * Overlay-covered strips of the map (px). The selected stop's popup is
+   * panned into the uncovered area (dispatch: the mobile bottom sheet).
+   */
+  viewportInset?: MapViewportInset;
 }
 
 function MapSkeleton() {

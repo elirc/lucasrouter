@@ -79,13 +79,14 @@ export function RouteLegend({
                   }}
                   aria-hidden="true"
                 />
-                <span
-                  className={`min-w-0 flex-1 truncate ${isHidden ? 'text-slate-400 line-through decoration-slate-300' : ''}`}
-                >
+                {/* Hidden state: strike-through + dimmed chip + unchecked box. The
+                    label stays >= 4.5:1 (slate-500) — the checkbox is still
+                    enabled (it is how you re-show the driver). */}
+                <span className={`min-w-0 flex-1 truncate ${isHidden ? 'text-slate-500 line-through' : ''}`}>
                   {d.name}
                 </span>
                 {count !== null ? (
-                  <span className={`shrink-0 tabular-nums text-xs ${isHidden ? 'text-slate-400' : 'text-slate-500'}`}>
+                  <span className="shrink-0 tabular-nums text-xs text-slate-500">
                     {count} {count === 1 ? 'stop' : 'stops'}
                   </span>
                 ) : null}

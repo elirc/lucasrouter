@@ -2,7 +2,7 @@
 
 import { ChevronRight, PartyPopper } from 'lucide-react';
 import Link from 'next/link';
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 import { Card } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -16,6 +16,8 @@ export interface RouteCompleteCardProps {
   stopsById: Record<string, Stop>;
   delivered: number;
   failed: number;
+  /** Ref to the heading (`tabIndex={-1}`) so the parent can focus it when the route completes. */
+  headingRef?: Ref<HTMLHeadingElement>;
   className?: string;
 }
 
@@ -39,6 +41,7 @@ export function RouteCompleteCard({
   stopsById,
   delivered,
   failed,
+  headingRef,
   className,
 }: RouteCompleteCardProps) {
   const packagesDelivered = route.stopIds.reduce((sum, id) => {
@@ -61,7 +64,12 @@ export function RouteCompleteCard({
           <PartyPopper className="size-6" />
         </span>
         <div className="min-w-0">
-          <h2 id="route-complete-heading" className="text-xl font-semibold leading-tight text-slate-900">
+          <h2
+            id="route-complete-heading"
+            ref={headingRef}
+            tabIndex={-1}
+            className="rounded-sm text-xl font-semibold leading-tight text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2"
+          >
             Route complete <span aria-hidden="true">🎉</span>
           </h2>
           <p className="mt-0.5 text-sm text-slate-600">

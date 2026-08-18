@@ -78,7 +78,7 @@
   outline-offset: -2px;
 }
 
-/* Popups: card-like, tighter content, larger close hit-area. */
+/* Popups: card-like, tighter content, 44px close hit-area. */
 .riq-popup .leaflet-popup-content-wrapper {
   border-radius: 0.75rem;
   box-shadow: 0 6px 20px rgb(15 23 42 / 0.18);
@@ -86,6 +86,8 @@
   padding: 0;
 }
 .riq-popup .leaflet-popup-content {
+  /* The first lines of content add their own right padding (pr-8) so the
+     text never runs under the close button. */
   margin: 12px 14px;
   line-height: 1.4;
   min-width: 200px;
@@ -99,23 +101,59 @@
 .riq-popup a.leaflet-popup-close-button {
   top: 2px;
   right: 2px;
-  width: 36px;
-  height: 36px;
+  width: 44px; /* min tap target */
+  height: 44px;
   font-size: 22px;
-  line-height: 36px;
+  line-height: 44px;
   color: rgb(100 116 139);
   border-radius: 9999px;
 }
-.riq-popup a.leaflet-popup-close-button:hover,
+.riq-popup a.leaflet-popup-close-button:hover {
+  color: rgb(15 23 42);
+  background: rgb(241 245 249);
+}
+/* Keyboard focus: same 2px inset ring as the zoom buttons (a background tint
+   alone is ~1.1:1 and invisible). */
 .riq-popup a.leaflet-popup-close-button:focus-visible {
   color: rgb(15 23 42);
   background: rgb(241 245 249);
-  outline: none;
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
 }
 
-/* Attribution: keep it readable but unobtrusive. */
+/* Same-corner stacking (phones put zoom + attribution both at top-right):
+   lay the corner out as a column and pin the attribution FIRST so it hugs the
+   corner as a 14px strip and the zoom bar sits below it — DOM/insertion order
+   changes when Leaflet re-adds a control after `setPosition`, CSS `order`
+   does not. Overlays at the top-left (legend chip) start below that strip. */
+.leaflet-top.leaflet-right,
+.leaflet-top.leaflet-left {
+  display: flex;
+  flex-direction: column;
+}
+.leaflet-top.leaflet-right {
+  align-items: flex-end;
+}
+.leaflet-top.leaflet-left {
+  align-items: flex-start;
+}
+.leaflet-top .leaflet-control-attribution {
+  order: -1;
+}
+
+/* Attribution: keep it readable but unobtrusive. Rounded on the corner that
+   faces the map (it hugs a container corner in every position). */
 .leaflet-container .leaflet-control-attribution {
   font-size: 10px;
   background: rgb(255 255 255 / 0.8);
-  border-top-left-radius: 0.375rem;
+  border-radius: 0.375rem 0 0 0; /* bottom-right (default) */
+}
+.leaflet-top.leaflet-right .leaflet-control-attribution {
+  border-radius: 0 0 0 0.375rem;
+}
+.leaflet-top.leaflet-left .leaflet-control-attribution {
+  border-radius: 0 0 0.375rem 0;
+}
+.leaflet-bottom.leaflet-left .leaflet-control-attribution {
+  border-radius: 0 0.375rem 0 0;
 }

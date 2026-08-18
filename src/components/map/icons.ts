@@ -4,6 +4,7 @@
 // given visual state always maps to the same icon instance.
 
 import { divIcon, type DivIcon } from 'leaflet';
+import { onColor } from '@/lib/color';
 import type { Priority, StopStatus } from '@/lib/types';
 import {
   DELIVERED_COLOR,
@@ -63,7 +64,7 @@ const X_SVG =
 
 /**
  * Circular 28px pin filled with the driver colour, white 2px border and drop
- * shadow. Shows the sequence number when routed, a priority/overnight dot
+ * shadow. Shows the sequence number (in a contrast-safe colour) when routed, a priority/overnight dot
  * top-right, a delivered check / failed X badge bottom-right, and a soft ring
  * when selected. Cached by visual state.
  */
@@ -77,9 +78,11 @@ export function stopIcon(spec: StopIconSpec): DivIcon {
   const shadow = `${ring}0 1px 3px rgba(15,23,42,.45)`;
   const opacity = spec.status === 'delivered' ? 0.75 : 1;
 
+  // Sequence number: white only where it reads at AA on the driver colour;
+  // slate-900 otherwise (white on the orange/green seed colours is < 3.5:1).
   const number =
     spec.seq !== null
-      ? `<span style="color:#fff;font-size:11px;font-weight:600;line-height:1;letter-spacing:-.02em">${spec.seq}</span>`
+      ? `<span style="color:${onColor(color)};font-size:11px;font-weight:600;line-height:1;letter-spacing:-.02em">${spec.seq}</span>`
       : '';
 
   let topBadge = '';

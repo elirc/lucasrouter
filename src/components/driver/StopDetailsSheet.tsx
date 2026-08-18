@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, RotateCcw, X } from 'lucide-react';
+import { AlertTriangle, Check, RotateCcw, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { Button, PriorityBadge, StatusPill } from '@/components/ui';
@@ -10,6 +10,7 @@ import type { Stop } from '@/lib/types';
 import { DriverDialog } from './DriverDialog';
 import { isEtaLate } from './NextStopCard';
 import { NavigateLink } from './NavigateLink';
+import { splitFailureNotes } from './notes';
 
 export interface StopDetailsSheetProps {
   /** Null/undefined closes the sheet. */
@@ -56,6 +57,10 @@ export function StopDetailsSheet({
 }: StopDetailsSheetProps) {
   const open = !!stop;
   const late = stop ? isEtaLate(eta, stop.timeWindow) : false;
+  // The store prefixes notes with the failure reason on a failed attempt;
+  // show that as "Last attempt" (only while the stop is failed), never as a note.
+  const { reason, note } = splitFailureNotes(stop?.notes);
+  const lastAttempt = stop?.status === 'failed' ? reason : null;
   return (
     <DriverDialog
       open={open}
@@ -95,10 +100,19 @@ export function StopDetailsSheet({
                 <span className="tabular-nums">{formatIsoTime(stop.deliveredAt)}</span>
               </Row>
             )}
-            {stop.notes && (
+            {lastAttempt && (
+              <div className="flex items-start justify-between gap-4 py-2.5">
+                <dt className="shrink-0 text-sm text-slate-500">Last attempt</dt>
+                <dd className="flex min-w-0 items-center gap-1.5 text-right text-sm font-medium text-amber-800">
+                  <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+                  {lastAttempt}
+                </dd>
+              </div>
+            )}
+            {note && (
               <div className="py-2.5">
                 <dt className="text-sm text-slate-500">Notes</dt>
-                <dd className="mt-0.5 text-sm text-slate-900">{stop.notes}</dd>
+                <dd className="mt-0.5 text-sm text-slate-900">{note}</dd>
               </div>
             )}
           </dl>

@@ -10,42 +10,31 @@ import { shortAddress } from '@/lib/geo';
 
 import { StopListItem, type StopListItemProps } from './StopListItem';
 
-export interface SortableStopRowProps
-  extends Omit<StopListItemProps, 'dragHandle' | 'setNodeRef' | 'style' | 'isDragging' | 'insertionHint'> {
-  /** Driver id of the item currently being dragged (null when idle). */
-  draggingDriverId: string | null;
-}
+export type SortableStopRowProps = Omit<
+  StopListItemProps,
+  'dragHandle' | 'setNodeRef' | 'style' | 'isDragging'
+>;
 
 /**
  * Desktop row: `StopListItem` wired to `useSortable`. The GripVertical button
  * is the only drag activator (so the row body stays a normal click target and
- * the ⋯ menu keeps working). Shows an insertion line when an item from a
- * *different* driver hovers over it — same-driver drags get dnd-kit's own
- * shifting animation.
+ * the ⋯ menu keeps working). `insertionHint` (from DriverRoutes, which knows
+ * the hovered row AND the before/after side) draws the line for cross-driver
+ * hovers — same-driver drags get dnd-kit's own shifting animation.
  */
-export function SortableStopRow({ draggingDriverId, ...rest }: SortableStopRowProps) {
-  const { stop, driver, disabled } = rest;
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    setActivatorNodeRef,
-    transform,
-    transition,
-    isDragging,
-    isOver,
-  } = useSortable({
-    id: stop.id,
-    disabled,
-    data: { type: 'stop', driverId: driver.id },
-  });
+export function SortableStopRow(props: SortableStopRowProps) {
+  const { stop, driver, disabled } = props;
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
+    useSortable({
+      id: stop.id,
+      disabled,
+      data: { type: 'stop', driverId: driver.id },
+    });
 
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
   };
-
-  const crossContainerHover = isOver && draggingDriverId !== null && draggingDriverId !== driver.id;
 
   const handle = (
     <button
@@ -68,12 +57,11 @@ export function SortableStopRow({ draggingDriverId, ...rest }: SortableStopRowPr
 
   return (
     <StopListItem
-      {...rest}
+      {...props}
       dragHandle={handle}
       setNodeRef={setNodeRef}
       style={style}
       isDragging={isDragging}
-      insertionHint={crossContainerHover}
     />
   );
 }

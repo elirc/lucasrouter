@@ -9,8 +9,10 @@ import { useAppStore, type ToastState, type ToastTone } from '@/store/useAppStor
 const AUTO_DISMISS_MS = 3500;
 const EXIT_MS = 200;
 
+// All three tones keep white text at >= 4.5:1 (AA): emerald-700 5.4:1,
+// red-600 4.8:1, slate-900 14:1. (emerald-600 was 3.7:1 - too light.)
 const TONE_CLASSES: Record<ToastTone, string> = {
-  success: 'bg-emerald-600 text-white',
+  success: 'bg-emerald-700 text-white',
   error: 'bg-red-600 text-white',
   info: 'bg-slate-900 text-white',
 };
@@ -21,13 +23,23 @@ const TONE_ICON: Record<ToastTone, typeof Info> = {
   info: Info,
 };
 
+export interface ToastProps {
+  /**
+   * Extra pixels the toast floats above the bottom safe-area inset. Screens
+   * with a bottom-anchored bar (driver route screen, dispatch sheet) pass the
+   * bar's height so the toast never covers the primary action. Default 0.
+   */
+  bottomOffset?: number;
+}
+
 /**
- * Global toast, rendered once in the root layout. Reads `toast` from the store,
- * auto-dismisses after 3.5 s (timer resets whenever a new toast id arrives),
- * and animates in (keyframe, replayed per toast id via `key`) and out
- * (transition while the previous toast lingers for EXIT_MS).
+ * Store-driven toast. Rendered once per screen (NOT in the root layout, so the
+ * static landing page does not pull the store into its bundle). Reads `toast`
+ * from the store, auto-dismisses after 3.5 s (timer resets whenever a new
+ * toast id arrives), and animates in (keyframe, replayed per toast id via
+ * `key`) and out (transition while the previous toast lingers for EXIT_MS).
  */
-export function Toast() {
+export function Toast({ bottomOffset = 0 }: ToastProps) {
   const toast = useAppStore((s) => s.toast);
   const dismissToast = useAppStore((s) => s.dismissToast);
 
@@ -59,7 +71,9 @@ export function Toast() {
       role="status"
       aria-live="polite"
       aria-atomic="true"
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center px-4 pb-safe"
+      className="pointer-events-none fixed inset-x-0 z-50 flex justify-center px-4"
+      // Safe-area inset + the caller's bar height; the inner card adds mb-4.
+      style={{ bottom: `calc(${Math.max(0, bottomOffset)}px + env(safe-area-inset-bottom, 0px))` }}
     >
       {shown && (
         <div
@@ -77,7 +91,8 @@ export function Toast() {
             type="button"
             onClick={dismissToast}
             aria-label="Dismiss notification"
-            className="-my-2 -mr-3 flex size-11 shrink-0 items-center justify-center rounded-lg text-white/80 hover:bg-white/15 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+            // white/90 keeps the X >= 4:1 on every tone (3:1 is the UI minimum).
+            className="-my-2 -mr-3 flex size-11 shrink-0 items-center justify-center rounded-lg text-white/90 hover:bg-white/15 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
           >
             <X className="size-4" aria-hidden="true" />
           </button>

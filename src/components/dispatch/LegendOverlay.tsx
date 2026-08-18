@@ -21,6 +21,10 @@ export interface LegendOverlayProps {
  * desktop; on phones it collapses behind a small "Legend" chip so it does not
  * crowd a 375px-wide map. Rendered as a *sibling* of the map wrapper (which is
  * `relative z-0 isolate`), so `z-10` reliably sits above Leaflet's panes.
+ *
+ * Phones put the OSM attribution flush in the map's top-right corner (a 14px
+ * strip, y 0–14); the chip starts at 16px so even a wide "Legend · 2 hidden"
+ * chip never overlaps it, and the opened legend hangs below the chip.
  */
 export function LegendOverlay({
   drivers,
@@ -34,7 +38,12 @@ export function LegendOverlay({
   const hiddenCount = hiddenDriverIds.length;
 
   return (
-    <div className={cn('pointer-events-none absolute top-3 left-3 z-10 flex flex-col items-start gap-2', className)}>
+    <div
+      className={cn(
+        'pointer-events-none absolute top-4 left-3 z-10 flex flex-col items-start gap-2 md:top-3',
+        className,
+      )}
+    >
       {/* Mobile chip (hidden on md+ where the legend is always shown). */}
       <button
         type="button"

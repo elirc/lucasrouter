@@ -110,13 +110,15 @@ export function MetricsCompare({ baseline, optimized, className }: MetricsCompar
           )}
         </div>
         {headline && (
+          // aria-label is not allowed on a plain <span> (role generic), so the
+          // context lives in visually-hidden text instead.
           <span
             className={cn(
               'shrink-0 rounded-lg px-2.5 py-1 text-xl font-bold tabular-nums ring-1 ring-inset',
               TONE_CLASSES[headline.tone],
             )}
-            aria-label={`Total distance change ${headline.text}`}
           >
+            <span className="sr-only">Total distance change </span>
             {headline.text}
           </span>
         )}
@@ -168,15 +170,11 @@ export function MetricsCompare({ baseline, optimized, className }: MetricsCompar
                         'inline-block min-w-[3.25rem] rounded-full px-2 py-0.5 text-center text-xs font-semibold ring-1 ring-inset tabular-nums',
                         TONE_CLASSES[delta.tone],
                       )}
-                      aria-label={
-                        delta.tone === 'better'
-                          ? `Improved ${delta.text}`
-                          : delta.tone === 'worse'
-                            ? `Worse ${delta.text}`
-                            : 'No change'
-                      }
                     >
                       {delta.text}
+                      <span className="sr-only">
+                        {delta.tone === 'better' ? ' improved' : delta.tone === 'worse' ? ' worse' : ' no change'}
+                      </span>
                     </span>
                   </td>
                 )}

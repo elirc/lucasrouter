@@ -74,7 +74,11 @@ function MapViewInner({
   zoomControlPosition = 'topright',
   attributionPosition = 'bottomright',
   showDirectionArrows = true,
+  viewportInset,
 }: MapViewProps) {
+  // Primitives (not the object) go to the memoised markers.
+  const insetBottom = viewportInset?.bottom ?? 0;
+  const insetTop = viewportInset?.top ?? 0;
   // ---- lookups ------------------------------------------------------------
   const stopsById = useMemo(() => {
     const out: Record<string, Stop> = {};
@@ -198,6 +202,8 @@ function MapViewInner({
       >
         <TileLayer url={OSM_URL} attribution={OSM_ATTRIBUTION} maxZoom={19} />
         <ZoomControl position={zoomControlPosition} />
+        {/* When a page puts both controls in the same top corner (phones), map.css
+            orders the attribution above the zoom bar so it hugs the corner. */}
         <AttributionControl position={attributionPosition} />
 
         {/* Viewport management */}
@@ -253,6 +259,8 @@ function MapViewInner({
             drivers={drivers}
             onSelectStop={handleSelectStop}
             onReassign={onReassign ? handleReassign : undefined}
+            insetBottom={insetBottom}
+            insetTop={insetTop}
           />
         ))}
 

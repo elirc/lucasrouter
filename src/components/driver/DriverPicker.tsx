@@ -4,8 +4,9 @@ import { ChevronRight, LayoutDashboard } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo } from 'react';
 
-import { Logo, Skeleton } from '@/components/ui';
+import { Logo, Skeleton, Toast } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { onColor } from '@/lib/color';
 import { formatDuration } from '@/lib/time';
 import type { Driver, Route, Stop } from '@/lib/types';
 import { driverProgress, useAppStore, useHasHydrated } from '@/store/useAppStore';
@@ -95,12 +96,14 @@ export function DriverPicker() {
         )}
 
         {ready && routes === null && (
-          <p className="mt-6 text-center text-xs text-slate-500">
+          // slate-600 (not 500): this sits on the slate-100 page ground.
+          <p className="mt-6 text-center text-xs text-slate-600">
             Routes have not been optimized yet — the dispatcher runs the optimizer, or you can start a demo
             optimization from your route screen.
           </p>
         )}
       </main>
+      <Toast />
     </DriverFrame>
   );
 }
@@ -129,6 +132,8 @@ function DriverPickCard({ driver, route, routesReady, stopsById, lastUsed, onPic
     .slice(0, 2)
     .join('')
     .toUpperCase();
+  // White text fails AA on the orange/green driver colours; pick per colour.
+  const fg = onColor(driver.color);
 
   return (
     <Link
@@ -145,8 +150,8 @@ function DriverPickCard({ driver, route, routesReady, stopsById, lastUsed, onPic
     >
       <span
         aria-hidden="true"
-        className="flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm"
-        style={{ backgroundColor: driver.color }}
+        className="flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold shadow-sm"
+        style={{ backgroundColor: driver.color, color: fg }}
       >
         {initials}
       </span>
@@ -155,8 +160,8 @@ function DriverPickCard({ driver, route, routesReady, stopsById, lastUsed, onPic
           <span className="truncate text-base font-semibold text-slate-900">{driver.name}</span>
           {lastUsed && (
             <span
-              className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 text-white"
-              style={{ backgroundColor: driver.color }}
+              className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4"
+              style={{ backgroundColor: driver.color, color: fg }}
             >
               Last used
             </span>

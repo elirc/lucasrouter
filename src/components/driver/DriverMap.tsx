@@ -29,11 +29,11 @@ export function DriverMap({ depot, stops, drivers, routes, focus, legLabel, clas
   const [visible, setVisible] = useState(true);
 
   const toggle = (
+    // The visible label already states the action ("Hide map" / "Show map"), so
+    // no aria-pressed: a swapping verb + pressed state read as contradictory.
     <button
       type="button"
       onClick={() => setVisible((v) => !v)}
-      aria-pressed={visible}
-      aria-label={visible ? 'Hide map' : 'Show map'}
       className={cn(
         'inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white/95 px-3 text-sm font-medium text-slate-700 shadow-sm backdrop-blur',
         'hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900',

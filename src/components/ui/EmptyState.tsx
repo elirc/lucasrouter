@@ -10,11 +10,18 @@ export interface EmptyStateProps {
   description?: string;
   /** Usually a <Button>. */
   action?: ReactNode;
+  /**
+   * Heading level of `title`. Default 2 — the empty state usually sits right
+   * under the page's h1 (driver screens). Pass 3 only when an h2 already
+   * precedes it, so the outline never skips a level.
+   */
+  headingLevel?: 2 | 3;
   className?: string;
 }
 
 /** Centered "nothing here yet" panel. Server-safe. */
-export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
+export function EmptyState({ icon, title, description, action, headingLevel = 2, className }: EmptyStateProps) {
+  const Heading = headingLevel === 3 ? 'h3' : 'h2';
   return (
     <div
       className={cn(
@@ -28,7 +35,7 @@ export function EmptyState({ icon, title, description, action, className }: Empt
       >
         {icon ?? <Inbox className="size-6" />}
       </div>
-      <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+      <Heading className="text-base font-semibold text-slate-900">{title}</Heading>
       {description && <p className="mt-1 max-w-sm text-sm text-slate-600">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>

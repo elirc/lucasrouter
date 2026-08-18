@@ -14,7 +14,11 @@
 //   * arriving (rounded to the minute, as displayed) strictly after
 //     `timeWindow.end` IS a violation;
 //   * departure = arrival + serviceMinutes;
-//   * the last leg returns to the depot; `totalMinutes` = depot arrival - shift start.
+//   * the last leg returns to the depot; `totalMinutes` = depot arrival - shift
+//     start, i.e. drive + service + waiting.
+//
+// Distances: every km here is ESTIMATED ROAD km (`estimatedRoadKm` = haversine
+// x ROAD_FACTOR, see distance.ts); drive minutes = road km / avgSpeedKmh * 60.
 
 import type {
   Depot,
@@ -26,7 +30,7 @@ import type {
   Stop,
 } from '@/lib/types';
 import { formatHHMM, parseHHMM } from '@/lib/time';
-import { driveMinutes, haversineKm } from './distance';
+import { driveMinutes, estimatedRoadKm } from './distance';
 import { resolveOptions } from './types';
 
 export interface ScheduleInput {
@@ -36,7 +40,7 @@ export interface ScheduleInput {
   stops: Stop[];
   /** driverId -> ORDERED stopIds. Missing keys / unknown ids are tolerated. */
   assignments: Record<string, string[]>;
-  /** avgSpeedKmh default 32; road factor 1.3 applied to haversine. */
+  /** avgSpeedKmh default 32; distances are haversine x 1.3 (estimated road km). */
   options?: OptimizeOptions;
 }
 
@@ -66,39 +70,69 @@ export interface EtaSimulation {
 }
 
 /**
+ * Pre-parsed timing facts of one stop, so hot loops (the repair pass evaluates
+ * thousands of candidate orders) do not re-parse "HH:MM" strings every time.
+ */
+export interface StopTiming {
+  /** Window open/close in minutes since midnight, or null when the stop has no window. */
+  window: { start: number; end: number } | null;
+  serviceMinutes: number;
+}
+
+/** Extract the timing facts of a stop (see `StopTiming`). */
+export function stopTiming(stop: Stop): StopTiming {
+  return {
+    window: stop.timeWindow
+      ? { start: parseHHMM(stop.timeWindow.start), end: parseHHMM(stop.timeWindow.end) }
+      : null,
+    serviceMinutes: stop.serviceMinutes,
+  };
+}
+
+/**
  * Walk one route and compute arrival / departure times. `legMinutes` must have
  * `stops.length + 1` entries (the last one is the return to the depot), or be
  * empty when there are no stops. Shared by `schedule()` and the time-window
  * repair pass so both agree on what "late" means.
  */
 export function simulateEtas(shiftStartMin: number, stops: Stop[], legMinutes: number[]): EtaSimulation {
+  return simulateTimings(shiftStartMin, stops.map(stopTiming), legMinutes);
+}
+
+/**
+ * `simulateEtas` on pre-parsed timings (the single source of truth for the ETA
+ * rules listed in the file header).
+ */
+export function simulateTimings(
+  shiftStartMin: number,
+  timings: StopTiming[],
+  legMinutes: number[],
+): EtaSimulation {
   const steps: EtaStep[] = [];
   let clock = shiftStartMin;
   let violations = 0;
-  if (stops.length === 0) {
+  if (timings.length === 0) {
     return { steps, depotArrivalMin: shiftStartMin, violations: 0 };
   }
-  for (let i = 0; i < stops.length; i++) {
-    const stop = stops[i];
+  for (let i = 0; i < timings.length; i++) {
+    const { window, serviceMinutes } = timings[i];
     let arrival = clock + legMinutes[i];
     let wait = 0;
     let late = false;
-    if (stop.timeWindow) {
-      const start = parseHHMM(stop.timeWindow.start);
-      const end = parseHHMM(stop.timeWindow.end);
-      if (arrival < start) {
-        wait = start - arrival;
-        arrival = start;
+    if (window) {
+      if (arrival < window.start) {
+        wait = window.start - arrival;
+        arrival = window.start;
       }
       // Compare on the minute we will actually display so metrics match the UI.
-      if (Math.round(arrival) > end) late = true;
+      if (Math.round(arrival) > window.end) late = true;
     }
     if (late) violations++;
-    const departure = arrival + stop.serviceMinutes;
+    const departure = arrival + serviceMinutes;
     steps.push({ arrivalMin: arrival, waitMin: wait, departureMin: departure, late });
     clock = departure;
   }
-  const depotArrivalMin = clock + legMinutes[stops.length];
+  const depotArrivalMin = clock + legMinutes[timings.length];
   return { steps, depotArrivalMin, violations };
 }
 
@@ -151,7 +185,7 @@ function buildRoute(depot: Depot, driver: Driver, routeStops: Stop[], avgSpeedKm
   const legKm: number[] = [];
   const legMin: number[] = [];
   for (let i = 0; i < points.length - 1; i++) {
-    const km = haversineKm(points[i], points[i + 1]);
+    const km = estimatedRoadKm(points[i], points[i + 1]); // road km, not straight-line
     legKm.push(km);
     legMin.push(driveMinutes(km, avgSpeedKmh));
   }

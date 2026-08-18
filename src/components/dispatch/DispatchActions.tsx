@@ -95,16 +95,24 @@ export function DispatchActions({ className }: DispatchActionsProps) {
             className="col-span-1 flex min-h-[44px] items-center gap-1 rounded-xl border border-red-200 bg-red-50 px-2 text-sm"
           >
             <span className="min-w-0 flex-1 truncate font-medium text-red-800">Reset?</span>
+            {/* Default (md) size keeps the 44px tap target for a destructive
+                confirm; px-3! trims the horizontal padding so "Reset? Yes No"
+                fits the half-width cell on a 375px phone. */}
             <Button
               ref={yesRef}
-              size="sm"
               variant="danger"
+              className="px-3!"
               onClick={() => void onConfirmReset()}
               aria-label="Yes, reset the demo"
             >
               Yes
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)} aria-label="No, keep my data">
+            <Button
+              variant="ghost"
+              className="px-3!"
+              onClick={() => setConfirming(false)}
+              aria-label="No, keep my data"
+            >
               No
             </Button>
           </div>

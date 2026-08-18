@@ -2,15 +2,25 @@
  * End-to-end smoke test against a running server (default http://localhost:3000)
  * using a local Chrome/Edge via puppeteer-core (no browser download).
  *
- *   pnpm start          # or pnpm dev
- *   node scripts/smoke-e2e.mjs [baseUrl]
+ *   pnpm build && pnpm start          # production build (timings are measured
+ *                                     # against it; `pnpm dev` works but is slower)
+ *   pnpm smoke [baseUrl]              # = node scripts/smoke-e2e.mjs [baseUrl]
  *
- * Walks the acceptance criteria: 45 grey stops + depot on /dispatch, optimize →
- * 3 routes + before/after metrics with optimized km < baseline, manual
- * reassignment updates metrics and persists to /driver/[id], the driver flow at
- * 375×812 (delivered advances, no horizontal scroll), no unexpected network
- * hosts, and no console errors. Screenshots land in ./e2e-screens/.
- * Exits non-zero on the first failed assertion.
+ * Prerequisites: a local Chrome or Edge (auto-detected in the usual install
+ * locations) or `CHROME_PATH=/path/to/chrome`. No browser is downloaded.
+ *
+ * Walks the acceptance criteria: 45 grey stops + depot on /dispatch (markers
+ * within 2 s of navigation start, measured in-page with `performance.now()`
+ * against a warmed server), optimize → 3 routes + before/after metrics with
+ * optimized km < baseline, manual reassignment updates metrics and persists to
+ * /driver/[id], the driver flow at 375×812 (delivered advances, failed with a
+ * reason, progress survives a reload, no horizontal scroll), desktop dispatch,
+ * legend/export/reset, the JSON API (400 on invalid input), no unexpected
+ * network hosts (own origin + OSM tiles only), and no console errors.
+ *
+ * Screenshots land in ./e2e-screens/ (git-ignored; the curated set lives in
+ * docs/screenshots/). Every failed check is printed as FAIL; the process exits
+ * non-zero when any check failed or the run crashed.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -107,13 +117,27 @@ try {
 
   // ------------------------------------------------------------- dispatch (mobile)
   const page = await newPage(browser, MOBILE);
-  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear()); // fresh demo state, same origin
-  const t0 = Date.now();
+  // Warm-up: the very first request to a freshly started `next start` pays for
+  // loading the route modules and the map chunk once; the spec's 2 s budget is
+  // about the app, not the server's cold start, so load /dispatch once, then
+  // wipe the demo state and measure the second (cold-storage) load.
   await page.goto(`${BASE}/dispatch`, { waitUntil: 'domcontentloaded' });
-  await waitFor(page, () => document.querySelectorAll('.riq-stop-icon').length === 45, { label: '45 stop markers' });
-  const loadMs = Date.now() - t0;
-  check('dispatch: 45 stop markers within 2s of load', loadMs < 4000, `${loadMs} ms (headless cold start)`);
+  await waitFor(page, () => document.querySelectorAll('.riq-stop-icon').length === 45, { label: 'warm-up markers' });
+  await page.evaluate(() => localStorage.clear()); // fresh demo state, same origin
+  await page.goto(`${BASE}/dispatch`, { waitUntil: 'domcontentloaded' });
+  // Measured IN the page from navigation start (performance.now() is relative
+  // to the document's timeOrigin), polled every 25 ms so the granularity is
+  // negligible.
+  await page.waitForFunction(() => document.querySelectorAll('.riq-stop-icon').length === 45, {
+    polling: 25,
+    timeout: 15000,
+  });
+  const loadMs = Math.round(await page.evaluate(() => performance.now()));
+  check(
+    'dispatch: 45 stop markers within 2 s of navigation start (warm server, empty storage)',
+    loadMs < 2000,
+    `${loadMs} ms`,
+  );
   check('dispatch: depot marker present', (await page.evaluate(() => document.querySelectorAll('.riq-depot-icon').length)) === 1);
   const greyCount = await page.evaluate(
     () => [...document.querySelectorAll('.riq-stop-icon')].filter((el) => el.innerHTML.includes('#94a3b8')).length,
@@ -243,17 +267,28 @@ try {
   // Failed with reason
   await page.click('button[aria-label^="Mark "][aria-label$="failed"]');
   await sleep(300);
-  await clickByText(page, '[role="dialog"] button', 'No one home');
+  await clickByText(page, 'dialog[open] button', 'No one home');
   await sleep(400);
   const st4 = await store(page);
   const second = d2Route.stopIds[1];
   check('driver: failed with reason persisted', st4.stops.find((s) => s.id === second)?.status === 'failed' && /No one home/.test(st4.stops.find((s) => s.id === second)?.notes ?? ''));
   await page.screenshot({ path: path.join(OUT, '08-driver-D2-after-actions.png') });
 
-  // Refresh persistence
+  // Refresh persistence: the statuses must come back from localStorage and the
+  // header must show 2 done out of N.
   await page.reload({ waitUntil: 'networkidle0' });
-  await waitFor(page, () => /2 of/.test(document.body.innerText), { label: 'progress after reload' });
-  check('driver: progress survives refresh', true);
+  await waitFor(page, () => /NEXT STOP|Route complete/i.test(document.body.innerText), { label: 'driver screen after reload' });
+  const st5r = await store(page);
+  const reloadedText = await page.evaluate(() => document.body.innerText);
+  const firstAfter = st5r?.stops?.find((s) => s.id === firstStop);
+  const secondAfter = st5r?.stops?.find((s) => s.id === second);
+  check(
+    'driver: progress survives refresh (delivered + failed statuses restored, header shows 2 of N)',
+    firstAfter?.status === 'delivered' &&
+      secondAfter?.status === 'failed' &&
+      new RegExp(`2 of ${d2Route.stopIds.length}`).test(reloadedText),
+    `${firstAfter?.status} / ${secondAfter?.status}; header ${(reloadedText.match(/\d+ of \d+/) ?? ['?'])[0]}`,
+  );
 
   // Navigate link
   const nav = await page.evaluate(() => document.querySelector('a[href^="https://www.google.com/maps/dir/"]')?.getAttribute('href'));
@@ -307,8 +342,11 @@ try {
   check('api/optimize returns 3 routes for the seed', good.routes?.length === 3 && good.algorithm === 'nn-2opt-v1', `${good.computeMs} ms`);
 
   // ------------------------------------------------------------- global checks
-  const allowed = [new URL(BASE).host, 'tile.openstreetmap.org', 'a.tile.openstreetmap.org', 'b.tile.openstreetmap.org', 'c.tile.openstreetmap.org', 'www.google.com'];
-  const unexpected = [...requestHosts].filter((h) => h && !allowed.includes(h) && !h.endsWith('.openstreetmap.org'));
+  // Spec: no runtime network besides OSM tiles, Next assets and our own /api.
+  // (The Navigate deep link is a plain <a target=_blank> whose href is asserted
+  // above; it is never followed here, so google.com must NOT be needed.)
+  const allowed = [new URL(BASE).host, 'tile.openstreetmap.org'];
+  const unexpected = [...requestHosts].filter((h) => h && !allowed.includes(h) && !/^[abc]\.tile\.openstreetmap\.org$/.test(h));
   check('network: only own origin + OSM tiles', unexpected.length === 0, `hosts: ${[...requestHosts].filter(Boolean).join(', ')}`);
   const realErrors = consoleErrors.filter((e) => !/favicon/.test(e));
   check('console: no errors', realErrors.length === 0, realErrors.slice(0, 5).join(' | '));

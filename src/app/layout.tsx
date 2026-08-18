@@ -3,7 +3,6 @@ import { Inter } from 'next/font/google';
 import type { ReactNode } from 'react';
 
 import { RegisterSW } from '@/components/RegisterSW';
-import { Toast } from '@/components/ui/Toast';
 
 import './globals.css';
 
@@ -50,7 +49,9 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
       </head>
       <body className="min-h-dvh bg-slate-100 font-sans text-slate-900">
         {children}
-        <Toast />
+        {/* No <Toast /> here: it reads the store, which would drag the optimizer + seed
+            into every page's bundle (incl. the static landing). Each app screen
+            (dispatch, driver) renders its own <Toast /> instead. */}
         <RegisterSW />
       </body>
     </html>

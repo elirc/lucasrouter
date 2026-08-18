@@ -3,7 +3,7 @@ export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from '.
 export { Card, type CardProps } from './Card';
 export { PriorityBadge, type PriorityBadgeProps } from './PriorityBadge';
 export { StatusPill, type StatusPillProps } from './StatusPill';
-export { Toast } from './Toast';
+export { Toast, type ToastProps } from './Toast';
 export { Logo, LogoMark, type LogoProps } from './Logo';
 export { Skeleton, type SkeletonProps } from './Skeleton';
 export { EmptyState, type EmptyStateProps } from './EmptyState';

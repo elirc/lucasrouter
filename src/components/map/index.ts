@@ -9,7 +9,7 @@
 // or './RoutePolyline' directly.
 
 export { default as MapView } from './MapView';
-export type { MapViewProps, FitPadding } from './MapView';
+export type { MapViewProps, FitPadding, MapViewportInset } from './MapView';
 
 export { StopMarker, DepotMarker, RoutePolyline, RoutePolylines } from './layers';
 export type { StopMarkerProps } from './StopMarker';

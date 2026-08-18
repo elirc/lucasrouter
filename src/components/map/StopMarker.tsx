@@ -4,7 +4,7 @@
 
 import { memo, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
 import { Marker, Popup, useMap } from 'react-leaflet';
-import type { LeafletEventHandlerFnMap, Marker as LeafletMarker } from 'leaflet';
+import type { LeafletEventHandlerFnMap, Marker as LeafletMarker, Popup as LeafletPopup } from 'leaflet';
 import type { Driver, Priority, Stop, StopStatus } from '@/lib/types';
 import { formatWindow, to12h } from '@/lib/time';
 import { stopIcon, UNASSIGNED_COLOR } from './icons';
@@ -25,6 +25,13 @@ export interface StopMarkerProps {
   drivers?: Driver[];
   onSelectStop?: (stopId: string | null) => void;
   onReassign?: (stopId: string, toDriverId: string) => void;
+  /**
+   * Pixels of the map hidden under a page overlay along the bottom / top edge
+   * (e.g. the dispatcher's bottom sheet). When this stop becomes selected its
+   * popup is panned into the uncovered area. Default 0.
+   */
+  insetBottom?: number;
+  insetTop?: number;
 }
 
 const PRIORITY_LABEL: Record<Priority, string> = {
@@ -52,6 +59,15 @@ const STATUS_CLASS: Record<StopStatus, string> = {
   failed: 'text-red-700',
 };
 
+/** Breathing room between the popup and the visible map edges (px). */
+const POPUP_MARGIN = 24;
+/**
+ * The popup opens above its marker with its tip ~11px above the marker
+ * centre; this much bottom padding keeps the whole 28px pin (plus a little
+ * air) above the uncovered edge, not just the popup.
+ */
+const MARKER_CLEARANCE = 32;
+
 function StopMarkerImpl({
   stop,
   color,
@@ -62,9 +78,19 @@ function StopMarkerImpl({
   drivers = [],
   onSelectStop,
   onReassign,
+  insetBottom = 0,
+  insetTop = 0,
 }: StopMarkerProps) {
   const map = useMap();
   const markerRef = useRef<LeafletMarker | null>(null);
+  const popupRef = useRef<LeafletPopup | null>(null);
+  // Latest insets for the selection effect (which must only re-run on
+  // selection changes, not whenever the sheet snaps while a popup is open).
+  // Declared before that effect so the same commit sees the fresh values.
+  const insetRef = useRef({ bottom: insetBottom, top: insetTop });
+  useEffect(() => {
+    insetRef.current = { bottom: insetBottom, top: insetTop };
+  }, [insetBottom, insetTop]);
 
   const icon = useMemo(
     () =>
@@ -93,19 +119,38 @@ function StopMarkerImpl({
     [onSelectStop, selected, stop.id],
   );
 
-  // React to external selection: open our popup, panning first when off-screen.
+  // React to external selection: open our popup inside the *uncovered* part of
+  // the map. Leaflet's own popup auto-pan does the work — it measures the real
+  // popup height once React has rendered the content and pans (animated) by
+  // exactly what is needed — we just widen its padding by the overlay insets
+  // (react-leaflet freezes Popup options at creation, so they are set
+  // imperatively right before opening). A marker that lies outside the map
+  // container altogether is first centred in the uncovered area — instantly,
+  // because an animated pre-pan would be cut short anyway by the popup's own
+  // auto-pan, which stops in-flight pan animations.
   useEffect(() => {
     const marker = markerRef.current;
     if (!marker) return;
-    if (selected) {
-      const latlng = marker.getLatLng();
-      if (!map.getBounds().contains(latlng)) {
-        map.panTo(latlng, { animate: true });
-      }
-      if (!marker.isPopupOpen()) marker.openPopup();
-    } else if (marker.isPopupOpen()) {
-      marker.closePopup();
+    if (!selected) {
+      if (marker.isPopupOpen()) marker.closePopup();
+      return;
     }
+    const { bottom, top } = insetRef.current;
+    const popup = popupRef.current;
+    if (popup) {
+      popup.options.autoPanPaddingTopLeft = [POPUP_MARGIN, top + POPUP_MARGIN];
+      popup.options.autoPanPaddingBottomRight = [POPUP_MARGIN, bottom + MARKER_CLEARANCE];
+    }
+
+    const size = map.getSize();
+    const point = map.latLngToContainerPoint(marker.getLatLng());
+    const uncoveredHeight = Math.max(0, size.y - top - bottom);
+    const outsideContainer = point.x < 0 || point.x > size.x || point.y < 0 || point.y > size.y;
+    if (outsideContainer && uncoveredHeight > 0) {
+      const target = { x: size.x / 2, y: top + uncoveredHeight / 2 };
+      map.panBy([point.x - target.x, point.y - target.y], { animate: false });
+    }
+    if (!marker.isPopupOpen()) marker.openPopup();
   }, [selected, map]);
 
   const handleReassign = (e: ChangeEvent<HTMLSelectElement>) => {
@@ -127,10 +172,17 @@ function StopMarkerImpl({
       zIndexOffset={selected ? 1000 : 0}
       eventHandlers={eventHandlers}
     >
-      <Popup className="riq-popup" maxWidth={280} minWidth={200} autoPanPadding={[24, 24]}>
+      <Popup
+        ref={popupRef}
+        className="riq-popup"
+        maxWidth={280}
+        minWidth={200}
+        autoPanPadding={[POPUP_MARGIN, POPUP_MARGIN]}
+      >
         <div className="space-y-1.5 text-sm text-slate-900">
-          <p className="pr-6 font-medium leading-snug">{stop.address}</p>
-          <p className="text-slate-600">
+          {/* pr-8: clear of the 44px close button in the popup's top-right corner. */}
+          <p className="pr-8 font-medium leading-snug">{stop.address}</p>
+          <p className="pr-8 text-slate-600">
             {stop.recipient}
             <span aria-hidden="true"> · </span>
             <span className="tabular-nums">

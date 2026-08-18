@@ -43,8 +43,10 @@ export function UnassignedSection({ onActivateStop, className }: UnassignedSecti
   const handleAssign = useCallback(
     (stop: Stop, toDriverId: string) => {
       const driver = drivers.find((d) => d.id === toDriverId);
-      moveStop(stop.id, toDriverId);
-      if (driver) showToast(`Moved ${shortAddress(stop.address)} → ${driver.name}`, 'success');
+      if (!driver) return;
+      // Toast only when the store reports a real move.
+      const moved = moveStop(stop.id, toDriverId);
+      if (moved) showToast(`Moved ${shortAddress(stop.address)} → ${driver.name}`, 'success');
     },
     [drivers, moveStop, showToast],
   );

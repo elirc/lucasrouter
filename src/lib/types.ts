@@ -39,7 +39,7 @@ export interface Depot {
 export interface RouteLeg {
   fromId: string; // Stop id or 'DEPOT'
   toId: string;
-  distanceKm: number;
+  distanceKm: number; // estimated road km (placeholder: haversine x 1.3)
   driveMinutes: number;
   path?: [number, number][]; // optional polyline [lat,lng][]; if absent, draw straight line
 }
@@ -48,8 +48,8 @@ export interface Route {
   driverId: string;
   stopIds: string[]; // ordered, excludes depot
   legs: RouteLeg[]; // depot -> s1 -> ... -> sN -> depot
-  totalDistanceKm: number;
-  totalMinutes: number; // drive + service
+  totalDistanceKm: number; // estimated road km
+  totalMinutes: number; // drive + service + waiting (early arrival waits for the window to open)
   etaByStopId: Record<string, string>; // "HH:MM"
 }
 
@@ -75,11 +75,11 @@ export interface OptimizeResponse {
 }
 
 export interface RouteMetrics {
-  totalDistanceKm: number;
-  totalMinutes: number;
+  totalDistanceKm: number; // sum of Route.totalDistanceKm (estimated road km)
+  totalMinutes: number; // sum of Route.totalMinutes (drive + service + waiting)
   stopsPerDriver: Record<string, number>;
   longestRouteMinutes: number;
-  timeWindowViolations: number;
+  timeWindowViolations: number; // stops whose ETA is strictly after timeWindow.end
 }
 
 export type FailureReason = 'No one home' | 'Wrong address' | 'Damaged' | 'Other';

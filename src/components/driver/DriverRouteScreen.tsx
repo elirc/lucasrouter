@@ -4,9 +4,9 @@ import './driver.css';
 
 import { Inbox, Route as RouteIcon, UserX, Wand2 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
-import { Button, Card, EmptyState, Skeleton } from '@/components/ui';
+import { Button, Card, EmptyState, Skeleton, Toast } from '@/components/ui';
 import { shortAddress } from '@/lib/geo';
 import { to12h } from '@/lib/time';
 import type { FailureReason, Stop } from '@/lib/types';
@@ -25,6 +25,13 @@ import { StopDetailsSheet } from './StopDetailsSheet';
 export interface DriverRouteScreenProps {
   driverId: string;
 }
+
+/**
+ * Height (px) of the sticky bottom bar (min-h 48/56 + 1px border). The toast
+ * floats this far above the safe-area inset so "Return to depot" and the
+ * "Next: …" strip are never covered by "Delivered · …" for 3.5 s.
+ */
+const BOTTOM_BAR_TOAST_OFFSET = 56;
 
 /**
  * The phone experience for one driver (`/driver/[id]`).
@@ -99,6 +106,24 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
   const failStop = failStopId ? (stopsById[failStopId] ?? null) : null;
   const detailsStop = detailsStopId ? stopsById[detailsStopId] : undefined;
 
+  // ---- focus management -----------------------------------------------------
+  // The Next Stop card is keyed on the stop id, so Delivered/Failed re-mount
+  // it and the button that was just activated leaves the DOM (focus would fall
+  // to <body>). When the action came from the card's own buttons we move focus
+  // deliberately onto the new card's heading (or the Route complete heading).
+  // Actions from the details sheet are left to the dialog, which returns focus
+  // to the row that opened it.
+  const nextHeadingRef = useRef<HTMLHeadingElement>(null);
+  const completeHeadingRef = useRef<HTMLHeadingElement>(null);
+  const pendingFocusRef = useRef(false);
+  const nextStopKey = nextStop?.id ?? null;
+  useEffect(() => {
+    if (!pendingFocusRef.current) return;
+    pendingFocusRef.current = false;
+    const target = isComplete ? completeHeadingRef.current : nextHeadingRef.current;
+    target?.focus({ preventScroll: true });
+  }, [nextStopKey, isComplete]);
+
   // ---- actions --------------------------------------------------------------
   const markDelivered = useCallback(
     (stopId: string) => {
@@ -136,6 +161,27 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
   const openFailSheet = useCallback((stopId: string) => {
     setDetailsStopId(null);
     setFailStopId(stopId);
+  }, []);
+
+  // Card-button variants: flag that the follow-up focus belongs to the card.
+  const cardDelivered = useCallback(
+    (stopId: string) => {
+      pendingFocusRef.current = true;
+      markDelivered(stopId);
+    },
+    [markDelivered],
+  );
+  const cardFailed = useCallback(
+    (stopId: string) => {
+      pendingFocusRef.current = true;
+      openFailSheet(stopId);
+    },
+    [openFailSheet],
+  );
+  const cancelFailSheet = useCallback(() => {
+    // Cancelled from the card path: nothing re-mounts, the dialog restores focus.
+    pendingFocusRef.current = false;
+    setFailStopId(null);
   }, []);
 
   // ---- render states --------------------------------------------------------
@@ -210,6 +256,7 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
             stopsById={stopsById}
             delivered={delivered}
             failed={failed}
+            headingRef={completeHeadingRef}
           />
         ) : nextStop ? (
           <NextStopCard
@@ -219,8 +266,9 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
             position={nextIndex + 1}
             total={total}
             eta={nextEta}
-            onDelivered={() => markDelivered(nextStop.id)}
-            onFailed={() => openFailSheet(nextStop.id)}
+            onDelivered={() => cardDelivered(nextStop.id)}
+            onFailed={() => cardFailed(nextStop.id)}
+            headingRef={nextHeadingRef}
           />
         ) : null}
 
@@ -281,7 +329,7 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
         onPick={(reason) => {
           if (failStopId) markFailed(failStopId, reason);
         }}
-        onClose={() => setFailStopId(null)}
+        onClose={cancelFailSheet}
       />
       <StopDetailsSheet
         stop={detailsStop}
@@ -292,6 +340,9 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
         onFailed={openFailSheet}
         onUndo={markPending}
       />
+
+      {/* Rendered here (not in the root layout) and lifted above the bottom bar. */}
+      <Toast bottomOffset={BOTTOM_BAR_TOAST_OFFSET} />
     </DriverFrame>
   );
 }
@@ -334,6 +385,8 @@ function StateScreen({
         }
       />
       <main className="flex flex-1 flex-col justify-center px-4 py-8">{children}</main>
+      {/* "Optimize now (demo)" and load errors toast from these states too. */}
+      <Toast />
     </DriverFrame>
   );
 }
@@ -353,24 +406,27 @@ function RouteScreenSkeleton() {
         </div>
         <div className="h-[3px] w-full bg-slate-100" />
       </div>
-      <main className="flex flex-1 flex-col gap-3 px-3 py-3" role="status" aria-busy="true" aria-label="Loading route">
-        <Card className="space-y-3 p-4">
-          <Skeleton className="h-3 w-28" />
-          <Skeleton className="h-6 w-full" />
-          <Skeleton className="h-6 w-2/3" />
-          <Skeleton className="h-4 w-1/2" />
-          <div className="grid grid-cols-2 gap-3 pt-2">
-            <Skeleton className="h-[52px] rounded-xl" />
-            <Skeleton className="h-[52px] rounded-xl" />
+      <main className="flex flex-1 flex-col px-3 py-3">
+        {/* <main> may not carry role=status; the live region is an inner div. */}
+        <div className="flex flex-1 flex-col gap-3" role="status" aria-busy="true" aria-label="Loading route">
+          <Card className="space-y-3 p-4">
+            <Skeleton className="h-3 w-28" />
+            <Skeleton className="h-6 w-full" />
+            <Skeleton className="h-6 w-2/3" />
+            <Skeleton className="h-4 w-1/2" />
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <Skeleton className="h-[52px] rounded-xl" />
+              <Skeleton className="h-[52px] rounded-xl" />
+            </div>
+            <Skeleton className="h-11 rounded-xl" />
+          </Card>
+          <Skeleton className="h-[35dvh] min-h-[220px] rounded-xl" />
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-20" />
+            <Skeleton className="h-14 rounded-xl" />
+            <Skeleton className="h-14 rounded-xl" />
+            <Skeleton className="h-14 rounded-xl" />
           </div>
-          <Skeleton className="h-11 rounded-xl" />
-        </Card>
-        <Skeleton className="h-[35dvh] min-h-[220px] rounded-xl" />
-        <div className="space-y-2">
-          <Skeleton className="h-4 w-20" />
-          <Skeleton className="h-14 rounded-xl" />
-          <Skeleton className="h-14 rounded-xl" />
-          <Skeleton className="h-14 rounded-xl" />
         </div>
       </main>
     </DriverFrame>

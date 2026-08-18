@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -46,15 +47,78 @@ interface MenuItem {
   onSelect: () => void;
 }
 
-/** Fixed row height (min-h-11) used to estimate the popover height before it mounts. */
+// Height estimate for the first (pre-measure) render only — the real height is
+// measured in a layout effect right after the portal mounts and the menu is
+// re-positioned before paint (see `placeMenu`).
+/** Row height (min-h-11). */
 const ITEM_HEIGHT = 44;
 /** Vertical padding of the popover (py-1). */
 const MENU_PADDING_Y = 8;
 /** Separator: 1px line + my-1 margins. */
 const SEPARATOR_HEIGHT = 9;
+/** Address header (text-[11px] with the inherited text-sm line box + pt-1/pb-1.5). */
+const HEADER_HEIGHT = 26;
+/** 1px top + bottom border. */
+const BORDER_HEIGHT = 2;
 const MENU_WIDTH = 240;
 const VIEWPORT_GUTTER = 8;
 const TRIGGER_GAP = 4;
+
+interface MenuPosition {
+  top: number;
+  left: number;
+  /** Set only when the menu fits on neither side: it scrolls internally. */
+  maxHeight?: number;
+}
+
+/**
+ * Place a `menuHeight`-tall popover next to `trigger` inside the viewport.
+ * Prefers below, then above; when neither side has room the roomier side is
+ * used and the menu is capped (`maxHeight`) so it never overlaps the trigger
+ * or leaves the viewport — a half-covered ⋯ button would turn a "dismiss" tap
+ * into a menu-item tap.
+ */
+function placeMenu(
+  trigger: DOMRect,
+  menuHeight: number,
+  viewportW: number,
+  viewportH: number,
+): MenuPosition {
+  const maxLeft = viewportW - MENU_WIDTH - VIEWPORT_GUTTER;
+  const left = Math.max(VIEWPORT_GUTTER, Math.min(trigger.right - MENU_WIDTH, maxLeft));
+  const roomBelow = viewportH - VIEWPORT_GUTTER - (trigger.bottom + TRIGGER_GAP);
+  const roomAbove = trigger.top - TRIGGER_GAP - VIEWPORT_GUTTER;
+  if (menuHeight <= roomBelow) return { top: trigger.bottom + TRIGGER_GAP, left };
+  if (menuHeight <= roomAbove) return { top: trigger.top - TRIGGER_GAP - menuHeight, left };
+  if (roomBelow >= roomAbove) {
+    return { top: trigger.bottom + TRIGGER_GAP, left, maxHeight: Math.max(ITEM_HEIGHT, roomBelow) };
+  }
+  const maxHeight = Math.max(ITEM_HEIGHT, roomAbove);
+  return { top: trigger.top - TRIGGER_GAP - maxHeight, left, maxHeight };
+}
+
+/**
+ * After a cross-driver move the row (and this menu instance) is unmounted and
+ * re-mounted under the target card, so the usual "focus returns to the
+ * trigger" effect never runs. Re-find the row's ⋯ trigger by its stable
+ * `data-stop-item` hook once React has committed; if the target card is
+ * collapsed (mobile default) the row is not in the DOM, so fall back to that
+ * card's header button — focus never drops to <body>.
+ */
+function focusMovedStop(stopId: string, toDriverId: string) {
+  requestAnimationFrame(() => {
+    const trigger = document.querySelector<HTMLElement>(
+      `[data-stop-item="${CSS.escape(stopId)}"] [aria-haspopup="menu"]`,
+    );
+    if (trigger) {
+      trigger.focus();
+      return;
+    }
+    document
+      .querySelector<HTMLElement>(`[data-driver-card="${CSS.escape(toDriverId)}"] button[aria-expanded]`)
+      ?.focus();
+  });
+}
 
 /**
  * "⋯" trigger + popover menu for moving a stop between drivers (and to the
@@ -80,7 +144,7 @@ export function MoveStopMenu({
   // a state value (not a ref) so the focus effect can react to the transition.
   const [menuState, setMenuState] = useState<MenuState>('closed');
   const open = menuState === 'open';
-  const [position, setPosition] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [position, setPosition] = useState<MenuPosition>({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
@@ -93,9 +157,15 @@ export function MoveStopMenu({
     setMenuState(restoreFocus ? 'closed-restore' : 'closed');
   }, []);
 
-  const select = (fn: () => void) => {
+  /**
+   * Run a menu action. `movedTo` marks a cross-driver move, whose row
+   * re-mounts elsewhere — focus is then restored via the DOM (see
+   * focusMovedStop) instead of the 'closed-restore' effect on this instance.
+   */
+  const select = (fn: () => void, movedTo?: string) => {
     close(true);
     fn();
+    if (movedTo) focusMovedStop(stop.id, movedTo);
   };
 
   // ---- items ---------------------------------------------------------------
@@ -130,7 +200,7 @@ export function MoveStopMenu({
           style={{ backgroundColor: d.color, boxShadow: '0 0 0 1px rgb(15 23 42 / 0.15)' }}
         />
       ),
-      onSelect: () => select(() => onMove(d.id)),
+      onSelect: () => select(() => onMove(d.id), d.id),
     }));
 
   const hasSeparator = ownRouteItems.length > 0 && driverItems.length > 0;
@@ -140,18 +210,32 @@ export function MoveStopMenu({
   const openMenu = () => {
     const trigger = triggerRef.current;
     if (!trigger) return;
-    const rect = trigger.getBoundingClientRect();
     const estimatedHeight =
-      allItems.length * ITEM_HEIGHT + MENU_PADDING_Y + (hasSeparator ? SEPARATOR_HEIGHT : 0);
-    const maxLeft = window.innerWidth - MENU_WIDTH - VIEWPORT_GUTTER;
-    const left = Math.max(VIEWPORT_GUTTER, Math.min(rect.right - MENU_WIDTH, maxLeft));
-    const fitsBelow = rect.bottom + TRIGGER_GAP + estimatedHeight <= window.innerHeight - VIEWPORT_GUTTER;
-    const top = fitsBelow
-      ? rect.bottom + TRIGGER_GAP
-      : Math.max(VIEWPORT_GUTTER, rect.top - TRIGGER_GAP - estimatedHeight);
-    setPosition({ top, left });
+      HEADER_HEIGHT +
+      BORDER_HEIGHT +
+      allItems.length * ITEM_HEIGHT +
+      MENU_PADDING_Y +
+      (hasSeparator ? SEPARATOR_HEIGHT : 0);
+    setPosition(
+      placeMenu(trigger.getBoundingClientRect(), estimatedHeight, window.innerWidth, window.innerHeight),
+    );
     setMenuState('open');
   };
+
+  // Once the portal is in the DOM, replace the estimate with the measured
+  // height (before paint, so there is no visible jump).
+  useLayoutEffect(() => {
+    if (!open) return;
+    const menu = menuRef.current;
+    const trigger = triggerRef.current;
+    if (!menu || !trigger) return;
+    // Natural height even if the estimate already capped it (scrollHeight is
+    // the padding box; add the borders).
+    const naturalHeight = Math.max(menu.offsetHeight, menu.scrollHeight + BORDER_HEIGHT);
+    setPosition(
+      placeMenu(trigger.getBoundingClientRect(), naturalHeight, window.innerWidth, window.innerHeight),
+    );
+  }, [open]);
 
   // ---- close on outside pointer / Escape / scroll / resize -------------------
   useEffect(() => {
@@ -232,7 +316,13 @@ export function MoveStopMenu({
     }
   };
 
-  const menuStyle: CSSProperties = { top: position.top, left: position.left, width: MENU_WIDTH };
+  const menuStyle: CSSProperties = {
+    top: position.top,
+    left: position.left,
+    width: MENU_WIDTH,
+    maxHeight: position.maxHeight,
+    overflowY: position.maxHeight === undefined ? undefined : 'auto',
+  };
 
   return (
     <>
@@ -294,7 +384,9 @@ function MenuButton({ item }: { item: MenuItem }) {
       onClick={item.onSelect}
       className={cn(
         'flex min-h-11 w-full items-center gap-3 px-3 text-left transition-colors',
-        'hover:bg-slate-50 focus:bg-slate-100 focus:outline-none',
+        // Roving focus is keyboard-driven, so the (mouse-only) background tint
+        // is not enough: keyboard focus gets the app's inset slate-900 ring.
+        'hover:bg-slate-50 focus:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-900',
         'disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent',
       )}
     >

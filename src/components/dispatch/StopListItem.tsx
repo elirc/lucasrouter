@@ -28,10 +28,16 @@ export interface StopListItemProps {
   setNodeRef?: (el: HTMLElement | null) => void;
   style?: CSSProperties;
   isDragging?: boolean;
-  /** Draw an insertion line above the row (cross-container drag hover). */
-  insertionHint?: boolean;
+  /**
+   * Cross-container drag hover: draw the insertion line above ('before') or
+   * below ('after') the row — the same side the drop will use.
+   */
+  insertionHint?: InsertionSide | null;
   className?: string;
 }
+
+/** Which side of a hovered row a cross-driver drop will insert on. */
+export type InsertionSide = 'before' | 'after';
 
 /**
  * One stop inside a driver card: `StopRow` + "⋯" move menu, selection
@@ -54,7 +60,7 @@ export function StopListItem({
   setNodeRef,
   style,
   isDragging = false,
-  insertionHint = false,
+  insertionHint = null,
   className,
 }: StopListItemProps) {
   const liRef = useRef<HTMLLIElement | null>(null);
@@ -89,7 +95,10 @@ export function StopListItem({
       {insertionHint && (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 z-10 h-0.5"
+          className={cn(
+            'pointer-events-none absolute inset-x-0 z-10 h-0.5',
+            insertionHint === 'before' ? 'top-0' : 'bottom-0',
+          )}
           style={{ backgroundColor: driver.color }}
         />
       )}

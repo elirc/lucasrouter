@@ -2,8 +2,9 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
-import { MapView, type FitPadding } from '@/components/map';
-import { BottomSheet, type SheetSnap } from '@/components/ui';
+import { MapView, type FitPadding, type MapViewportInset } from '@/components/map';
+import { BottomSheet, Toast, type SheetSnap } from '@/components/ui';
+import { useSafeAreaInsetBottom } from '@/components/ui/BottomSheet';
 import { shortAddress } from '@/lib/geo';
 import { useAppStore, useHasHydrated } from '@/store/useAppStore';
 
@@ -13,6 +14,7 @@ import { DispatchTopBar } from './DispatchTopBar';
 import { LegendOverlay } from './LegendOverlay';
 import { PanelHeader } from './PanelHeader';
 import { useIsDesktop } from './useIsDesktop';
+import { useViewportHeight } from './useViewportHeight';
 
 /**
  * Memoised map: DispatchScreen re-renders on panel-ish store changes
@@ -24,10 +26,10 @@ const MemoMapView = memo(MapView);
 /** Fit padding: room for the legend on desktop, for the peeking sheet on phones. */
 const DESKTOP_FIT_PADDING: [number, number] = [48, 48];
 /**
- * BottomSheet chrome above/below the `header` slot: grab handle area
- * (pt-2 + h-8 + pb-1 = 44px) plus the header wrapper's pb-3 (12px). Added to
- * the measured header height to get a peek that shows exactly the header +
- * Optimize button.
+ * BottomSheet chrome above/below the `header` slot: grab handle row (44px)
+ * plus the header wrapper's pb-3 (12px). Added to the measured header height
+ * to get a peek that shows exactly the header + Optimize button. (The sheet
+ * itself adds `env(safe-area-inset-bottom)` on top of this.)
  */
 const SHEET_HEADER_CHROME_PX = 56;
 const FALLBACK_PEEK_HEIGHT = 156;
@@ -42,6 +44,8 @@ const MOBILE_FIT_PADDING: FitPadding = {
   topLeft: [16, 16],
   bottomRight: [16, FALLBACK_PEEK_HEIGHT + 16],
 };
+
+const NO_INSET: MapViewportInset = { bottom: 0 };
 
 /**
  * The dispatcher (`/dispatch`): full-bleed Leaflet map with the planning panel
@@ -74,6 +78,8 @@ export function DispatchScreen() {
   // ---- mobile sheet -----------------------------------------------------------------
   const [snap, setSnap] = useState<SheetSnap>('peek');
   const [headerHeight, setHeaderHeight] = useState(0);
+  const viewportHeight = useViewportHeight();
+  const safeBottom = useSafeAreaInsetBottom();
 
   // Measure the sheet header (date/stats/Optimize) so the peek snap shows it
   // exactly, even if the text wraps on very narrow phones. React 19 callback
@@ -97,6 +103,24 @@ export function DispatchScreen() {
   }, []);
   const peekHeight = headerHeight > 0 ? headerHeight + SHEET_HEADER_CHROME_PX : FALLBACK_PEEK_HEIGHT;
 
+  /**
+   * Pixels of the map (measured from its bottom edge) hidden under the sheet,
+   * so marker popups can pan into the uncovered part. 'peek' = header strip +
+   * safe-area inset; 'half' = 50% of the viewport. 'full' covers the map
+   * entirely — but a stop activated from the list snaps the sheet to 'half' in
+   * the same render, so it is treated like 'half' here. Object identity is
+   * stable while the number is, keeping the memoised map from re-rendering.
+   */
+  const coveredBottom = isDesktop
+    ? 0
+    : snap === 'peek'
+      ? peekHeight + safeBottom
+      : Math.round(viewportHeight * 0.5);
+  const viewportInset = useMemo<MapViewportInset>(
+    () => (coveredBottom > 0 ? { bottom: coveredBottom } : NO_INSET),
+    [coveredBottom],
+  );
+
   // ---- callbacks (stable → map + panel don't re-render needlessly) ---------------------
   /** Row click in the panel: select on the map; on phones shrink the sheet so the popup shows. */
   const handleActivateStop = useCallback(
@@ -107,14 +131,19 @@ export function DispatchScreen() {
     [isDesktop, setSelectedStop],
   );
 
-  /** "Reassign to…" from the map popup. Reads the store imperatively to stay stable. */
+  /**
+   * "Reassign to…" from the map popup. Reads the store imperatively to stay
+   * stable. `moveStop` reports whether anything actually changed (it can be a
+   * no-op for an unknown stop/driver), so the success toast only fires on a
+   * real move — never a "Moved …" for a select that snapped back.
+   */
   const handleReassign = useCallback((stopId: string, toDriverId: string) => {
     const state = useAppStore.getState();
     const stop = state.stops.find((s) => s.id === stopId);
     const driver = state.drivers.find((d) => d.id === toDriverId);
     if (!stop || !driver) return;
-    state.moveStop(stopId, toDriverId);
-    state.showToast(`Moved ${shortAddress(stop.address)} → ${driver.name}`, 'success');
+    const moved = state.moveStop(stopId, toDriverId);
+    if (moved) state.showToast(`Moved ${shortAddress(stop.address)} → ${driver.name}`, 'success');
   }, []);
 
   // ---- derived ----------------------------------------------------------------------------
@@ -137,8 +166,9 @@ export function DispatchScreen() {
       <DispatchTopBar />
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        {/* Map (+ legend overlay as a sibling above the isolated map wrapper) */}
-        <div className="relative min-h-0 flex-1">
+        {/* Map (+ legend overlay as a sibling above the isolated map wrapper) —
+            the page's primary content, hence the <main> landmark. */}
+        <main aria-label="Route map" className="relative min-h-0 flex-1">
           <MemoMapView
             depot={depot}
             stops={stops}
@@ -150,8 +180,10 @@ export function DispatchScreen() {
             onReassign={handleReassign}
             fitKey={fitKey}
             fitPadding={mobilePadding}
+            viewportInset={viewportInset}
             // The peeking sheet covers the bottom edge on phones: keep the OSM
-            // attribution readable by stacking it under the zoom control.
+            // attribution readable by placing it at the top-right (above the
+            // zoom control, clear of the legend at the top-left).
             attributionPosition={isDesktop ? 'bottomright' : 'topright'}
             className="h-full w-full"
           />
@@ -164,12 +196,14 @@ export function DispatchScreen() {
               unassignedCount={unassignedCount}
             />
           )}
-        </div>
+        </main>
 
         {isDesktop ? (
           <aside
             aria-label="Dispatch panel"
-            className="flex w-[420px] shrink-0 flex-col border-l border-slate-200 bg-slate-100 xl:w-[460px]"
+            // Proportional width so the map keeps ~60% across the md range
+            // (340px floor at 768px, 460px cap from ~1150px). Mirrors DispatchSkeleton.
+            className="flex w-[clamp(340px,40vw,460px)] shrink-0 flex-col border-l border-slate-200 bg-slate-100"
           >
             <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
               <PanelHeader />
@@ -196,6 +230,11 @@ export function DispatchScreen() {
           </BottomSheet>
         )}
       </div>
+
+      {/* Store-driven toast. On phones it floats just above the sheet's peek
+          strip (Toast adds the safe-area inset itself) so it never covers the
+          bottom-anchored Optimize button; on desktop it sits at the bottom. */}
+      <Toast bottomOffset={isDesktop ? 0 : peekHeight} />
     </div>
   );
 }

@@ -7,14 +7,18 @@
 // contract, invariants and a Python serverless example.
 //
 // Pipeline of the placeholder ("nn-2opt-v1"):
-//   1. distance matrix   - haversine km, index 0 = depot            (distance.ts)
+//   1. distance matrix   - haversine x 1.3 road factor, index 0 = depot (distance.ts)
 //   2. assignment        - angle-seeded k-means + capacity/balance   (assign.ts)
 //   3. sequencing        - nearest neighbour + 2-opt per driver      (sequence.ts)
-//   4. time-window repair - pull late stops earlier                  (repair.ts)
+//   4. time-window repair - pull late stops earlier, push stops that
+//                          would idle at a closed window later        (repair.ts)
 //   5. schedule          - legs, ETAs, totals, metrics               (schedule.ts)
 //
-// The whole thing is pure, deterministic and runs in a few milliseconds for
-// 45 stops / 3 drivers.
+// All reported km are ESTIMATED ROAD km (haversine x ROAD_FACTOR); drive time is
+// road km / avgSpeedKmh * 60. See distance.ts.
+//
+// The whole thing is pure, deterministic and runs in a few tens of milliseconds
+// for 45 stops / 3 drivers (the idle-repair pass is the expensive part).
 
 import type { OptimizeRequest, OptimizeResponse } from '@/lib/types';
 import { parseHHMM } from '@/lib/time';
@@ -36,7 +40,14 @@ export type { ScheduleInput, ScheduleOutput } from './schedule';
 
 // Handy primitives for other modules (map helpers, scripts). Not required by
 // the contract, but stable.
-export { haversineKm, buildDistanceMatrix, driveMinutes, ROAD_FACTOR, DEFAULT_SPEED_KMH } from './distance';
+export {
+  haversineKm,
+  estimatedRoadKm,
+  buildDistanceMatrix,
+  driveMinutes,
+  ROAD_FACTOR,
+  DEFAULT_SPEED_KMH,
+} from './distance';
 export { assignStops } from './assign';
 
 /**

@@ -1,7 +1,5 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-
 import { StopRow, type StopRowState } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import type { Driver, Route, Stop } from '@/lib/types';
@@ -20,9 +18,14 @@ export interface DriverStopListProps {
 /**
  * Ordered list of the driver's stops. Done stops are dimmed, the next pending
  * stop is ringed in the driver's colour (`aria-current="step"`), the rest are
- * upcoming. Whenever `nextIndex` changes after mount the current row is
- * scrolled into view (`block: 'nearest'`); the initial render is left alone so
- * the page opens on the next-stop card, not the list.
+ * upcoming.
+ *
+ * Deliberately NO auto-scroll when `nextIndex` advances: the list sits below
+ * the fold on a phone, so scrolling the new current row into view scrolled the
+ * whole page and pushed the Next Stop card (the primary actions) under the
+ * sticky header after two or three deliveries. The card at the top is the
+ * source of truth for "what's next"; the list is reference. Rows keep
+ * `scroll-mt/mb` so any programmatic or anchor scroll clears the sticky bars.
  */
 export function DriverStopList({
   route,
@@ -33,18 +36,6 @@ export function DriverStopList({
   onSelectStop,
   className,
 }: DriverStopListProps) {
-  const listRef = useRef<HTMLOListElement>(null);
-  const prevNextIndexRef = useRef<number | null>(null);
-  const nextStopId = nextIndex >= 0 ? route.stopIds[nextIndex] : null;
-
-  useEffect(() => {
-    const prev = prevNextIndexRef.current;
-    prevNextIndexRef.current = nextIndex;
-    if (prev === null || prev === nextIndex || !nextStopId) return;
-    const el = listRef.current?.querySelector<HTMLElement>(`[data-stop-id="${nextStopId}"]`);
-    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [nextIndex, nextStopId]);
-
   const total = route.stopIds.length;
 
   return (
@@ -57,10 +48,7 @@ export function DriverStopList({
           {remaining === 0 ? 'All done' : `${remaining} of ${total} remaining`}
         </p>
       </div>
-      <ol
-        ref={listRef}
-        className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
-      >
+      <ol className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         {route.stopIds.map((id, i) => {
           const stop = stopsById[id];
           if (!stop) return null;
@@ -75,7 +63,7 @@ export function DriverStopList({
                 color={driver.color}
                 state={state}
                 onClick={() => onSelectStop(id)}
-                // Keep the row clear of the sticky header/footer when scrolled into view.
+                // Keep the row clear of the sticky header/footer if it is ever scrolled into view.
                 className="scroll-mt-20 scroll-mb-16"
               />
             </li>

@@ -2,13 +2,15 @@
 
 RouteIQ ships with a placeholder optimizer (`nn-2opt-v1`: angle-seeded k-means → nearest-neighbour → 2-opt → time-window repair). It exists so the UI has something real to render; it is **not** the product. This document describes the contract a replacement must honour, where to swap it in, and what the UI assumes.
 
-TL;DR: keep `OptimizeRequest → OptimizeResponse` (`src/lib/types.ts`), keep the invariants in [§4](#4-invariants-your-algorithm-must-keep), stay under ~2 s on Vercel, and set `algorithm` to your version string.
+TL;DR: keep `OptimizeRequest → OptimizeResponse` (`src/lib/types.ts`), keep the invariants in [§4](#4-invariants-your-algorithm-must-keep), stay under ~2 s on Vercel, respect the request limits in [§1.3](#13-request-limits-enforced-by-apioptimize), and set `algorithm` to your version string.
 
 ---
 
 ## 1. The contract, field by field
 
 All types live in [`src/lib/types.ts`](../src/lib/types.ts). Times are `"HH:MM"` 24-hour strings, distances are kilometres, durations are minutes.
+
+**Distance model of the placeholder.** RouteIQ has no road network at runtime, so every kilometre it plans with *and reports* (`RouteLeg.distanceKm`, `Route.totalDistanceKm`, `RouteMetrics.totalDistanceKm`) is an **estimated road km = great-circle (haversine) km × 1.3**, and drive time is `roadKm / avgSpeedKmh × 60`. A production algorithm with a real router should report its real road km / minutes in the same fields; the UI just displays them (see [§6](#6-what-the-ui-does-after-you-return) for how that affects the before/after card).
 
 ### 1.1 `OptimizeRequest` (input)
 
@@ -46,9 +48,9 @@ All types live in [`src/lib/types.ts`](../src/lib/types.ts). Times are `"HH:MM"`
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `respectTimeWindows` | `true` | When `false`, windows are ignored for planning (metrics still count violations). |
+| `respectTimeWindows` | `true` | When `false`, the placeholder's **sequencing stage does not repair late arrivals** (the time-window repair pass in `optimize()` is skipped). ETAs are still computed with the same rules — a driver arriving early still waits for the window to open — and `metrics.timeWindowViolations` still counts late arrivals. |
 | `balanceLoad` | `true` | When `true`, stop counts per driver should differ by at most 3. |
-| `avgSpeedKmh` | `32` | Used to turn distance into drive minutes: `minutes = km / avgSpeedKmh × 60 × 1.3` (1.3 = road factor over straight-line distance). |
+| `avgSpeedKmh` | `32` | Used to turn distance into drive minutes: `minutes = roadKm / avgSpeedKmh × 60`, where `roadKm` is the estimated road distance (haversine × 1.3, see the note above). |
 
 ### 1.2 `OptimizeResponse` (output)
 
@@ -67,7 +69,7 @@ All types live in [`src/lib/types.ts`](../src/lib/types.ts). Times are `"HH:MM"`
 | `driverId` | `string` | Matches `Driver.id`. |
 | `stopIds` | `string[]` | Ordered visit sequence, **excluding** the depot. `[]` for an idle driver. |
 | `legs` | `RouteLeg[]` | Closed chain `DEPOT → stopIds[0] → … → stopIds[n-1] → DEPOT`, i.e. `stopIds.length + 1` legs, or `[]` when there are no stops. |
-| `totalDistanceKm` | `number` | Sum of leg distances, 2 decimals. |
+| `totalDistanceKm` | `number` | Sum of leg distances (estimated road km), 2 decimals. |
 | `totalMinutes` | `number` | Depot-to-depot duration = drive + service + waiting, integer. |
 | `etaByStopId` | `Record<string, "HH:MM">` | Arrival time for **every** id in `stopIds` (after any wait). |
 
@@ -76,7 +78,7 @@ All types live in [`src/lib/types.ts`](../src/lib/types.ts). Times are `"HH:MM"`
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `fromId`, `toId` | `string` | Stop id or `"DEPOT"`. |
-| `distanceKm` | `number` | 2 decimals. |
+| `distanceKm` | `number` | Estimated road km (haversine × 1.3 in the placeholder; real road km if you have a router), 2 decimals. |
 | `driveMinutes` | `number` | Integer. |
 | `path` | `[lat, lng][]?` | Optional road geometry. If absent the map draws a straight line. A production algorithm with a real router can fill this in and the map will follow it. |
 
@@ -91,6 +93,21 @@ All types live in [`src/lib/types.ts`](../src/lib/types.ts). Times are `"HH:MM"`
 | `timeWindowViolations` | Number of assigned stops whose ETA is strictly after `timeWindow.end`. |
 
 `computeMetrics(routes, stops)` in `src/lib/optimizer/schedule.ts` derives all of these from routes alone; you can call it instead of computing metrics yourself.
+
+### 1.3 Request limits (enforced by `/api/optimize`)
+
+The route handler validates the body with zod **before** any algorithm runs and answers `400 { error: "Invalid OptimizeRequest", issues: [{ path, message }] }` when:
+
+| Rule | Issue `path` | Why |
+| --- | --- | --- |
+| more than **1000 stops** | `stops` | the endpoint is public and the placeholder is O(n²)–O(n³); a request must not be able to allocate gigabytes or run for minutes |
+| more than **50 drivers** | `drivers` | same |
+| **duplicate stop ids** (`"Duplicate stop ids: S001, …"`) | `stops` | the "every stop exactly once" invariant and every id-keyed lookup in the UI assume unique ids |
+| **duplicate driver ids** | `drivers` | `stopsPerDriver` / `Route.driverId` are keyed by driver id |
+| a stop whose id is the literal **`"DEPOT"`** | `stops.<i>.id` | reserved for `RouteLeg.fromId` / `toId` |
+| any field-level problem (bad `"HH:MM"`, latitude out of range, negative packages, unknown enum value, …) | the field path, e.g. `stops.3.timeWindow.start` | shape mirrors `src/lib/types.ts` |
+
+Unknown keys are stripped rather than rejected. Malformed JSON → `400 { error: "Request body must be valid JSON", issues: [] }`; an exception thrown by the optimizer → `500`. If your solver needs different limits, change `MAX_STOPS` / `MAX_DRIVERS` in `src/app/api/optimize/route.ts` (and mind the ~2 s budget in [§5](#5-performance-budget)).
 
 ---
 
@@ -140,40 +157,46 @@ All types live in [`src/lib/types.ts`](../src/lib/types.ts). Times are `"HH:MM"`
       "driverId": "D1",
       "stopIds": ["S003"],
       "legs": [
-        { "fromId": "DEPOT", "toId": "S003", "distanceKm": 2.82, "driveMinutes": 7 },
-        { "fromId": "S003", "toId": "DEPOT", "distanceKm": 2.82, "driveMinutes": 7 }
+        { "fromId": "DEPOT", "toId": "S003", "distanceKm": 3.67, "driveMinutes": 7 },
+        { "fromId": "S003", "toId": "DEPOT", "distanceKm": 3.67, "driveMinutes": 7 }
       ],
-      "totalDistanceKm": 5.65,
+      "totalDistanceKm": 7.34,
       "totalMinutes": 19,
       "etaByStopId": { "S003": "08:07" }
     },
     {
       "driverId": "D2",
-      "stopIds": ["S001", "S002"],
+      "stopIds": ["S002", "S001"],
       "legs": [
-        { "fromId": "DEPOT", "toId": "S001", "distanceKm": 6.67, "driveMinutes": 16 },
-        { "fromId": "S001", "toId": "S002", "distanceKm": 0.15, "driveMinutes": 0 },
-        { "fromId": "S002", "toId": "DEPOT", "distanceKm": 6.7, "driveMinutes": 16 }
+        { "fromId": "DEPOT", "toId": "S002", "distanceKm": 8.71, "driveMinutes": 16 },
+        { "fromId": "S002", "toId": "S001", "distanceKm": 0.2, "driveMinutes": 0 },
+        { "fromId": "S001", "toId": "DEPOT", "distanceKm": 8.68, "driveMinutes": 16 }
       ],
-      "totalDistanceKm": 13.52,
-      "totalMinutes": 54,
-      "etaByStopId": { "S001": "09:00", "S002": "09:04" }
+      "totalDistanceKm": 17.58,
+      "totalMinutes": 50,
+      "etaByStopId": { "S002": "08:46", "S001": "09:00" }
     }
   ],
   "unassignedStopIds": [],
   "metrics": {
-    "totalDistanceKm": 19.17,
-    "totalMinutes": 73,
+    "totalDistanceKm": 24.92,
+    "totalMinutes": 69,
     "stopsPerDriver": { "D1": 1, "D2": 2 },
-    "longestRouteMinutes": 54,
+    "longestRouteMinutes": 50,
     "timeWindowViolations": 0
   },
   "algorithm": "nn-2opt-v1",
-  "computeMs": 10.9
+  "computeMs": 24.7
 }
 ```
 
-Things to notice: D2 leaves at 08:30, would reach S001 at 08:46, but the window opens at 09:00, so the ETA is clamped to `09:00` and the wait is included in `totalMinutes` (54 ≈ 30 min from 08:30 until the window opens, 4 min service, a 150 m hop, 3 min service, 16 min back to the depot). `driveMinutes` of `0` for a 150 m hop is just integer rounding; the underlying totals use unrounded values.
+(Produced by running `optimize()` on exactly the request above; `computeMs` is whatever the machine measured and will differ.)
+
+Things to notice:
+
+- All `distanceKm` values are **estimated road km** (haversine × 1.3): the depot → S003 hop is 2.82 km as the crow flies and is reported as 3.67 km.
+- D2 leaves at 08:30 and reaches the downtown pair at 08:46. Pure nearest-neighbour would visit S001 first, but its window opens at 09:00, so the driver would idle 14 minutes and S002 would slip behind that wait; the time-window repair pass therefore serves S002 first (08:46, no window) and arrives at S001 at 08:49, where the ETA is clamped to `09:00` — an 11-minute **wait**, not a violation — and the wait is included in `totalMinutes` (50 = 16 drive + 3 service + 0 hop + 11 wait + 4 service + 16 back).
+- `driveMinutes` of `0` for a 200 m hop is just integer rounding; the underlying totals use unrounded values.
 
 ---
 
@@ -198,6 +221,8 @@ export function optimize(req: OptimizeRequest): OptimizeResponse {
 ```
 
 Reusing `schedule()` is the easiest way to guarantee valid legs/ETAs/metrics; if you have your own travel-time model you can build `Route` objects yourself and call `computeMetrics(routes, stops)`.
+
+For reference, the placeholder you are replacing does: (1) distance matrix (haversine × 1.3), (2) angle-seeded k-means assignment with capacity / balance rebalancing, (3) nearest-neighbour + 2-opt per driver, (4) a **time-window repair pass** that alternates a *late* pass (move a late stop earlier in its own route while violations strictly decrease) with an *idle* pass (while some stop waits for its window to open, relocate a single stop — either push the waiting stop later or pull a stop from behind the wait forward — accepting only moves that do not add violations and get the driver back to the depot earlier, or equally early with everyone served earlier), so idle time is pushed to the tail of the route instead of stranding no-window stops behind a closed window; skipped when `respectTimeWindows === false`, capped at 100 iterations per pass / 20 alternations, idle pass only for routes ≤ 120 stops; (5) `schedule()`. It is deterministic and pure (`src/lib/optimizer/`).
 
 Keep the module free of side effects and Node-only imports if you want the store's offline fallback (it imports `optimize()` directly in the browser when `/api/optimize` is unreachable). If your solver is server-only, leave `optimize()` as the fallback and go with Option B.
 
@@ -310,7 +335,7 @@ The UI and store rely on these; the test-suite in `tests/optimizer.test.ts` chec
 
 `/api/optimize` runs as a Vercel serverless function (`runtime = 'nodejs'`). Budget the whole request at **≤ 2 s** including cold start so the “Optimize” button feels instant; the store shows a spinner and then a toast with `computeMs`. Guidelines:
 
-- The placeholder solves 45 stops / 3 drivers in single-digit milliseconds. Anything under ~500 ms of solve time is invisible to the user.
+- The placeholder solves 45 stops / 3 drivers in a few tens of milliseconds (~25–90 ms measured; the idle-repair pass is the expensive part, plain NN + 2-opt is ~3 ms). Anything under ~500 ms of solve time is invisible to the user.
 - If a metaheuristic needs a time limit, cap it around 1 s and return the best-so-far solution – never block for the full function timeout.
 - For Python (Option B): budget cold start of the runtime + import time of your solver. Keep the wheel small, import lazily inside `solve()`, and consider `maxDuration` in `vercel.json` only as a safety net, not a target.
 - The client falls back to the in-browser TypeScript `optimize()` when the API call fails, so a timeout degrades gracefully but silently swaps algorithms – watch `algorithm` in the toast during testing.
@@ -319,17 +344,21 @@ The UI and store rely on these; the test-suite in `tests/optimizer.test.ts` chec
 
 ## 6. What the UI does after you return
 
-- The store keeps `routes`, `metrics`, `algorithm`, `computeMs`. It also runs `baseline()` (round-robin, `baseline-round-robin-v1`) locally to render the “before/after” comparison card; you do not need to provide a baseline.
-- **Manual reassignment (drag a stop to another driver in the dispatch list, or “Reassign to…” in a map popup) does not call your algorithm.** The store rewrites `assignments` and re-runs `schedule()` from `src/lib/optimizer/schedule.ts` to recompute legs, ETAs, totals and metrics. It never re-sequences: the moved stop is inserted at the chosen index (default: end of the target route). Only the “Optimize” button (and `resetDemo` → `optimize`) calls `/api/optimize`.
-- Marking stops delivered/failed updates `stop.status` locally and never triggers a re-optimise.
+- The store keeps `routes`, `metrics`, `algorithm`, `computeMs`. It also runs `baseline()` (round-robin, `baseline-round-robin-v1`) locally to render the “before/after” comparison card; you do not need to provide a baseline. The baseline is scheduled with the placeholder's distance model (estimated road km = haversine × 1.3, drive minutes = road km / `avgSpeedKmh` × 60). If your solver reports *real* road km / minutes, the card compares them against that ×1.3 estimate — roughly like-for-like, but not exact; if you want an exact comparison, run the baseline assignments through your own travel-time model too (`baseline()` returns them as `routes[i].stopIds`).
+- **Who calls `/api/optimize`:** only the **Optimize / Re-optimize routes** button on `/dispatch` and the **“Optimize now (demo)”** button shown on an un-optimized `/driver/[id]`. **Reset demo does not re-optimize** — it reloads the seed and clears routes, metrics and statuses; the dispatcher presses Optimize again. Nothing else (no timer, no status change, no page load) triggers the algorithm.
+- **Manual reassignment (drag a stop to another driver in the dispatch list, “⋯ → Move to …”, or “Reassign to…” in a map popup) does not call your algorithm.** The store rewrites `assignments` and re-runs `schedule()` from `src/lib/optimizer/schedule.ts` to recompute legs, ETAs, totals and metrics. It never re-sequences: the moved stop is inserted at the chosen index (default: end of the target route). This also works **before** any optimisation: the first manual move bootstraps an empty plan (every driver `[]`), so `routes` becomes non-null with a single assigned stop while `algorithm`, `lastOptimizedAt` and the baseline stay `null` — a solver-backed integration must not assume that `routes !== null` implies `/api/optimize` has run. `moveStop()` returns `false` (and the UI shows no toast) for a no-op or an unknown id.
+- Marking stops delivered/failed updates `stop.status` locally and never triggers a re-optimise. Undoing a failed stop restores its original notes (the failure reason prefix is stripped).
 - Legs without `path` are drawn as straight lines. If your solver returns real road geometry in `RouteLeg.path` (as `[lat, lng]` pairs) the map follows it, no UI change required.
+- Persistence: the whole plan is stored in `localStorage` (`routeiq-v1`, blob version 1) and kept in sync between open tabs on the same device; a corrupt or unavailable storage never blocks the app (it starts from defaults). None of this touches your algorithm.
 
 ---
 
 ## 7. Checklist for a new algorithm
 
 - [ ] `algorithm` string bumped; `/api/health` reports it.
-- [ ] `pnpm test` still green (the invariants above are enforced on the seed).
+- [ ] `pnpm verify` still green (typecheck + lint + tests; the invariants above are enforced on the seed in `tests/optimizer.test.ts`, the request limits in `tests/api-optimize.test.ts`).
 - [ ] Runs under 2 s on the seed from a cold start.
 - [ ] Deterministic on the seed (or seeded from input).
+- [ ] Reported km / minutes documented: real road figures, or the estimate model of [§1](#1-the-contract-field-by-field) (the before/after card compares against the ×1.3-haversine baseline).
 - [ ] Optional: fills `RouteLeg.path` if you have a router.
+- [ ] Optional: `pnpm smoke` against `pnpm build && pnpm start` for the full UI walk-through.

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
  * Generates the RouteIQ PWA icons with ZERO dependencies (pure Node):
- *   public/icons/icon-192.png        (192×192)
- *   public/icons/icon-512.png        (512×512)
- *   public/icons/apple-touch-icon.png (180×180)
+ *   public/icons/icon-192.png            (192×192, purpose "any")
+ *   public/icons/icon-512.png            (512×512, purpose "any")
+ *   public/icons/icon-maskable-192.png   (192×192, purpose "maskable")
+ *   public/icons/icon-maskable-512.png   (512×512, purpose "maskable")
+ *   public/icons/apple-touch-icon.png    (180×180)
  *
  * The artwork mirrors public/icons/icon.svg: a slate-900 (#0f172a) rounded
  * square with a white route curve threading three white waypoint dots.
@@ -11,7 +13,13 @@
  * anti-aliased without supersampling; the RGBA buffer is then encoded as a
  * PNG by hand (zlib.deflateSync + manual CRC32 chunks).
  *
- * Usage: node scripts/generate-icons.mjs
+ * The "maskable" variants follow the W3C maskable-icon contract: the whole
+ * square is filled with the background colour (no transparent corners — the
+ * launcher applies its own circle / squircle / rounded-square mask) and the
+ * artwork is scaled so that it stays inside the central "safe zone" circle
+ * (radius 40 % of the icon, i.e. the inner 80 %), so no mask can clip it.
+ *
+ * Usage: node scripts/generate-icons.mjs   (or `pnpm generate-icons`)
  */
 
 import { deflateSync } from 'node:zlib';
@@ -40,6 +48,16 @@ const P1 = [264, 264];
 const C2 = [2 * P1[0] - C1[0], 2 * P1[1] - C1[1]]; // reflected control point (T)
 const P2 = [400, 144];
 const DOTS = [P0, P1, P2];
+
+/**
+ * Maskable safe zone: everything must fit inside a circle of radius 40 % of the
+ * icon (W3C). The artwork's farthest point from the centre is the outer edge of
+ * an end dot (~222 design px, i.e. 43 % of 512), so for the maskable variant it
+ * is scaled down (see MASKABLE_SCALE) to sit inside the 204.8 px radius with a
+ * small margin.
+ */
+const SAFE_ZONE_RADIUS = 0.4 * DESIGN; // 204.8 design px
+const ARTWORK_MARGIN = 14; // design px of breathing room inside the safe zone
 
 /** Flatten a quadratic Bézier into `n` segments' worth of points. */
 function quadPoints(a, c, b, n) {
@@ -97,12 +115,32 @@ function coverage(sd) {
   return c < 0 ? 0 : c > 1 ? 1 : c;
 }
 
-/** Rasterise the icon at `size` px into an RGBA buffer. */
-function renderIcon(size) {
+/** Farthest extent of the artwork (stroke + dots) from the design centre, in design px. */
+function artworkRadius() {
+  const half = DESIGN / 2;
+  let r = 0;
+  for (const [x, y] of ROUTE) r = Math.max(r, Math.hypot(x - half, y - half) + STROKE_WIDTH / 2);
+  for (const [x, y] of DOTS) r = Math.max(r, Math.hypot(x - half, y - half) + DOT_RADIUS);
+  return r;
+}
+
+/** Scale factor that fits the artwork inside the maskable safe zone (with margin). */
+const MASKABLE_SCALE = Math.min(1, (SAFE_ZONE_RADIUS - ARTWORK_MARGIN) / artworkRadius());
+
+/**
+ * Rasterise the icon at `size` px into an RGBA buffer.
+ *
+ * `maskable: false` (default) — the "any" icon: rounded slate square with
+ * transparent corners, artwork at design scale.
+ * `maskable: true` — full-bleed opaque square, artwork shrunk about the centre
+ * by MASKABLE_SCALE so it sits inside the central 80 % safe zone.
+ */
+function renderIcon(size, { maskable = false } = {}) {
   const buf = Buffer.alloc(size * size * 4);
   const s = size / DESIGN; // design → pixel scale
   const inv = 1 / s;
   const half = DESIGN / 2;
+  const artScale = maskable ? MASKABLE_SCALE : 1;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -110,16 +148,22 @@ function renderIcon(size) {
       const dx = (x + 0.5) * inv;
       const dy = (y + 0.5) * inv;
 
-      // Background: rounded square (distance is in design units → scale to px).
-      const bgCov = coverage(roundedBoxSdf(dx, dy, half, half, half, CORNER_RADIUS) * s);
+      // Background: rounded square for "any" (distance is in design units →
+      // scale to px); the maskable icon fills the whole square (opaque
+      // everywhere — the launcher's mask provides the shape).
+      const bgCov = maskable ? 1 : coverage(roundedBoxSdf(dx, dy, half, half, half, CORNER_RADIUS) * s);
 
-      // Foreground: stroke ∪ dots.
-      let fgSd = routeDist(dx, dy) - STROKE_WIDTH / 2;
+      // Foreground: stroke ∪ dots, evaluated in artwork space (the design
+      // shrunk about its centre for the maskable variant).
+      const ax = half + (dx - half) / artScale;
+      const ay = half + (dy - half) / artScale;
+      let fgSd = routeDist(ax, ay) - STROKE_WIDTH / 2;
       for (const [cx, cy] of DOTS) {
-        const d = Math.hypot(dx - cx, dy - cy) - DOT_RADIUS;
+        const d = Math.hypot(ax - cx, ay - cy) - DOT_RADIUS;
         if (d < fgSd) fgSd = d;
       }
-      const fgCov = coverage(fgSd * s) * bgCov; // clip foreground to background
+      // Distances were measured in artwork units → back to design → to px.
+      const fgCov = coverage(fgSd * artScale * s) * bgCov; // clip foreground to background
 
       const i = (y * size + x) * 4;
       // Composite: transparent → BG → FG.
@@ -201,6 +245,8 @@ function encodePng(rgba, width, height) {
 const TARGETS = [
   { file: 'icon-192.png', size: 192 },
   { file: 'icon-512.png', size: 512 },
+  { file: 'icon-maskable-192.png', size: 192, maskable: true },
+  { file: 'icon-maskable-512.png', size: 512, maskable: true },
   { file: 'apple-touch-icon.png', size: 180 },
 ];
 
@@ -208,19 +254,40 @@ mkdirSync(OUT_DIR, { recursive: true });
 
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 let ok = true;
-for (const { file, size } of TARGETS) {
+for (const { file, size, maskable = false } of TARGETS) {
   const started = Date.now();
-  const png = encodePng(renderIcon(size), size, size);
+  const rgba = renderIcon(size, { maskable });
+  const png = encodePng(rgba, size, size);
   const out = join(OUT_DIR, file);
   writeFileSync(out, png);
 
-  // Self-check: signature + non-trivial size.
+  // Self-check: signature + non-trivial size, plus the maskable contract
+  // (opaque corner pixel, artwork confined to the safe-zone circle).
   const head = readFileSync(out).subarray(0, 8);
   const bytes = statSync(out).size;
-  const valid = head.equals(PNG_SIG) && bytes > 1000;
+  let valid = head.equals(PNG_SIG) && bytes > 1000;
+  if (maskable) {
+    const cornerOpaque = rgba[3] === 255;
+    const c = size / 2;
+    let farthestFg = 0;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 4;
+        // Foreground pixels are (near-)white; the background is dark slate.
+        if (rgba[i] > 128) farthestFg = Math.max(farthestFg, Math.hypot(x + 0.5 - c, y + 0.5 - c));
+      }
+    }
+    const inSafeZone = farthestFg <= 0.4 * size;
+    valid &&= cornerOpaque && inSafeZone;
+    if (!cornerOpaque || !inSafeZone) {
+      console.error(
+        `   ${file}: cornerOpaque=${cornerOpaque} farthestFg=${farthestFg.toFixed(1)}px (limit ${(0.4 * size).toFixed(1)}px)`,
+      );
+    }
+  }
   ok &&= valid;
   console.log(
-    `${valid ? 'ok ' : 'BAD'} ${file.padEnd(22)} ${String(size).padStart(3)}px  ${String(bytes).padStart(6)} bytes  ${Date.now() - started}ms`,
+    `${valid ? 'ok ' : 'BAD'} ${file.padEnd(24)} ${String(size).padStart(3)}px  ${String(bytes).padStart(6)} bytes  ${Date.now() - started}ms${maskable ? '  (maskable)' : ''}`,
   );
 }
 
