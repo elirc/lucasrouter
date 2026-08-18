@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { formatTodayLong } from '@/lib/time';
+import { formatClock as formatClockDate, formatTodayLong } from '@/lib/time';
 import { useAppStore } from '@/store/useAppStore';
 
 export interface PanelHeaderProps {
@@ -16,7 +16,7 @@ export interface PanelHeaderProps {
 function formatClock(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return formatClockDate(d);
 }
 
 /**

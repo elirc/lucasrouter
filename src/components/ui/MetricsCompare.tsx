@@ -82,85 +82,109 @@ const TONE_CLASSES = {
 /**
  * The "sales moment" card: Baseline vs Optimized with delta chips. Optimized
  * column is emphasized, baseline muted. Server-safe (pure formatting).
+ *
+ * Rendered as a real <table> (4 columns: metric / baseline / optimized / change)
+ * so it degrades gracefully at 375px and reads correctly to screen readers.
  */
 export function MetricsCompare({ baseline, optimized, className }: MetricsCompareProps) {
   const hasBaseline = baseline !== null;
+  const headline =
+    hasBaseline ? describeDelta(baseline.totalDistanceKm, optimized.totalDistanceKm, 'percent') : null;
+
   return (
     <section
       aria-label="Before and after comparison"
       className={cn('rounded-xl border border-slate-200 bg-white p-4 shadow-sm', className)}
     >
-      <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Before / After</p>
-
-      <div
-        className={cn(
-          'mt-3 grid items-center gap-x-3 gap-y-2 text-sm',
-          hasBaseline
-            ? 'grid-cols-[minmax(0,1.4fr)_auto_auto_auto]'
-            : 'grid-cols-[minmax(0,1fr)_auto]',
-        )}
-        role="table"
-      >
-        {/* header row */}
-        <div role="row" className="contents">
-          <span role="columnheader" className="sr-only">
-            Metric
-          </span>
-          {hasBaseline && (
-            <span role="columnheader" className="text-right text-xs font-medium text-slate-500">
-              Baseline
-            </span>
-          )}
-          <span role="columnheader" className="text-right text-xs font-semibold text-slate-900">
-            Optimized
-          </span>
-          {hasBaseline && (
-            <span role="columnheader" className="sr-only">
-              Change
-            </span>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Before / After</p>
+          {headline && (
+            <p className="mt-1 text-sm text-slate-600">
+              {headline.tone === 'better'
+                ? 'Less driving than the as-listed plan'
+                : headline.tone === 'worse'
+                  ? 'More driving than the as-listed plan'
+                  : 'Same distance as the as-listed plan'}
+            </p>
           )}
         </div>
-
-        {ROWS.map((row) => {
-          const after = row.value(optimized);
-          const before = hasBaseline ? row.value(baseline) : null;
-          const delta = before !== null ? describeDelta(before, after, row.delta) : null;
-          return (
-            <div role="row" className="contents" key={row.label}>
-              <span role="rowheader" className="truncate text-slate-600">
-                {row.label}
-              </span>
-              {before !== null && (
-                <span role="cell" className="text-right text-slate-500 tabular-nums">
-                  {row.format(before)}
-                </span>
-              )}
-              <span role="cell" className="text-right font-semibold text-slate-900 tabular-nums">
-                {row.format(after)}
-              </span>
-              {delta && (
-                <span role="cell" className="text-right">
-                  <span
-                    className={cn(
-                      'inline-block min-w-[3.25rem] rounded-full px-2 py-0.5 text-center text-xs font-semibold ring-1 ring-inset tabular-nums',
-                      TONE_CLASSES[delta.tone],
-                    )}
-                    aria-label={
-                      delta.tone === 'better'
-                        ? `Improved ${delta.text}`
-                        : delta.tone === 'worse'
-                          ? `Worse ${delta.text}`
-                          : 'No change'
-                    }
-                  >
-                    {delta.text}
-                  </span>
-                </span>
-              )}
-            </div>
-          );
-        })}
+        {headline && (
+          <span
+            className={cn(
+              'shrink-0 rounded-lg px-2.5 py-1 text-xl font-bold tabular-nums ring-1 ring-inset',
+              TONE_CLASSES[headline.tone],
+            )}
+            aria-label={`Total distance change ${headline.text}`}
+          >
+            {headline.text}
+          </span>
+        )}
       </div>
+
+      <table className="mt-3 w-full border-collapse text-sm">
+        <thead>
+          <tr className="text-xs text-slate-500">
+            <th scope="col" className="pb-1.5 text-left font-medium">
+              Metric
+            </th>
+            {hasBaseline && (
+              <th scope="col" className="pb-1.5 text-right font-medium">
+                Baseline
+              </th>
+            )}
+            <th scope="col" className="pb-1.5 text-right font-semibold text-slate-900">
+              Optimized
+            </th>
+            {hasBaseline && (
+              <th scope="col" className="pb-1.5 text-right font-medium">
+                <span className="sr-only">Change</span>
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {ROWS.map((row) => {
+            const after = row.value(optimized);
+            const before = hasBaseline ? row.value(baseline) : null;
+            const delta = before !== null ? describeDelta(before, after, row.delta) : null;
+            return (
+              <tr key={row.label} className="border-t border-slate-100">
+                <th scope="row" className="py-2 pr-2 text-left font-normal leading-tight text-slate-600">
+                  {row.label}
+                </th>
+                {before !== null && (
+                  <td className="py-2 pl-2 text-right whitespace-nowrap text-slate-500 tabular-nums">
+                    {row.format(before)}
+                  </td>
+                )}
+                <td className="py-2 pl-2 text-right font-semibold whitespace-nowrap text-slate-900 tabular-nums">
+                  {row.format(after)}
+                </td>
+                {delta && (
+                  <td className="py-2 pl-2 text-right">
+                    <span
+                      className={cn(
+                        'inline-block min-w-[3.25rem] rounded-full px-2 py-0.5 text-center text-xs font-semibold ring-1 ring-inset tabular-nums',
+                        TONE_CLASSES[delta.tone],
+                      )}
+                      aria-label={
+                        delta.tone === 'better'
+                          ? `Improved ${delta.text}`
+                          : delta.tone === 'worse'
+                            ? `Worse ${delta.text}`
+                            : 'No change'
+                      }
+                    >
+                      {delta.text}
+                    </span>
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
 
       {!hasBaseline && (
         <p className="mt-3 text-xs text-slate-500">Run the optimizer to see the baseline comparison.</p>

@@ -77,10 +77,14 @@ export function BottomSheet({
   // Track the visual viewport height (≈ 100dvh) for drag math + resize.
   useEffect(() => {
     const measure = () => setViewportH(window.innerHeight);
-    measure();
+    // `innerHeight` forces layout; take the first reading inside a frame
+    // callback so it shares the frame's own layout instead of forcing an
+    // extra one right after the (heavy) mount commit.
+    const frame = requestAnimationFrame(measure);
     window.addEventListener('resize', measure);
     window.visualViewport?.addEventListener('resize', measure);
     return () => {
+      cancelAnimationFrame(frame);
       window.removeEventListener('resize', measure);
       window.visualViewport?.removeEventListener('resize', measure);
     };

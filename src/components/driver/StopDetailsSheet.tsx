@@ -4,7 +4,7 @@ import { Check, RotateCcw, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { Button, PriorityBadge, StatusPill } from '@/components/ui';
-import { formatWindow, to12h } from '@/lib/time';
+import { formatClock, formatWindow, to12h } from '@/lib/time';
 import type { Stop } from '@/lib/types';
 
 import { DriverDialog } from './DriverDialog';
@@ -28,7 +28,7 @@ export interface StopDetailsSheetProps {
 function formatIsoTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return formatClock(d);
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {

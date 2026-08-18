@@ -9,6 +9,7 @@ import { useEffect, useEffectEvent, useRef } from 'react';
 import { useMap } from 'react-leaflet';
 import { latLngBounds, type Map as LeafletMap } from 'leaflet';
 import { boundsOf, type LatLng, type LatLngTuple } from '@/lib/geo';
+import type { FitPadding } from './MapView';
 
 const FIT_MAX_ZOOM = 15;
 const DEFAULT_PADDING: [number, number] = [32, 32];
@@ -18,8 +19,8 @@ export interface FitBoundsProps {
   points: LatLng[];
   /** Whenever this changes the map re-fits (dispatch mode). */
   fitKey?: string | number;
-  /** Fit padding in pixels. Default [32, 32]. */
-  padding?: [number, number];
+  /** Fit padding in pixels (symmetric tuple or { topLeft, bottomRight }). Default [32, 32]. */
+  padding?: FitPadding;
   /** Suppress fitting (e.g. when a focus leg is active). */
   disabled?: boolean;
 }
@@ -76,12 +77,16 @@ export function FitBounds({ points, fitKey, padding, disabled = false }: FitBoun
   return null;
 }
 
-function fitTo(map: LeafletMap, points: LatLng[], padding?: [number, number]) {
+function fitTo(map: LeafletMap, points: LatLng[], padding?: FitPadding) {
   const b = boundsOf(points);
   if (!b) return;
   const bounds = latLngBounds(b[0], b[1]);
   if (!bounds.isValid()) return;
-  map.fitBounds(bounds, { padding: padding ?? DEFAULT_PADDING, maxZoom: FIT_MAX_ZOOM, animate: false });
+  const pad = padding ?? DEFAULT_PADDING;
+  const paddingOpts = Array.isArray(pad)
+    ? { padding: pad }
+    : { paddingTopLeft: pad.topLeft, paddingBottomRight: pad.bottomRight };
+  map.fitBounds(bounds, { ...paddingOpts, maxZoom: FIT_MAX_ZOOM, animate: false });
 }
 
 // ---------------------------------------------------------------------------

@@ -80,12 +80,14 @@ export function StopRow({
   const body = (
     <>
       {circle}
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-slate-900">{shortAddress(stop.address)}</span>
-          {stop.priority !== 'standard' && <PriorityBadge priority={stop.priority} />}
-        </span>
-        {!compact && <span className="block truncate text-xs text-slate-500">{stop.recipient}</span>}
+      <span className="min-w-0 flex-1 text-left">
+        <span className="block truncate text-sm font-medium text-slate-900">{shortAddress(stop.address)}</span>
+        {(!compact || stop.priority !== 'standard') && (
+          <span className="flex min-w-0 items-center gap-1.5">
+            {stop.priority !== 'standard' && <PriorityBadge priority={stop.priority} size="sm" />}
+            {!compact && <span className="truncate text-xs text-slate-500">{stop.recipient}</span>}
+          </span>
+        )}
         {stop.timeWindow && (
           <span className="block text-[11px] text-slate-500 tabular-nums">
             Window {formatWindow(stop.timeWindow)}

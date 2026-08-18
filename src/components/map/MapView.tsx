@@ -9,6 +9,15 @@ import type { ControlPosition } from 'leaflet';
 import type { Depot, Driver, Route, Stop } from '@/lib/types';
 
 /** Props for the RouteIQ map (contract shared with the dispatcher + driver pages). */
+/**
+ * Padding for the fit-to-all-stops framing. Either symmetric `[x, y]` or
+ * asymmetric `{ topLeft, bottomRight }` — the latter lets a page keep the
+ * markers above a fixed bottom sheet (`bottomRight: [x, sheetHeight + x]`).
+ */
+export type FitPadding =
+  | [number, number]
+  | { topLeft: [number, number]; bottomRight: [number, number] };
+
 export interface MapViewProps {
   depot: Depot;
   stops: Stop[];
@@ -36,7 +45,7 @@ export interface MapViewProps {
 
   // --- Optional extras (not part of the cross-module contract) -------------
   /** Padding used by fit-to-bounds in dispatch mode. Default `[32, 32]`. */
-  fitPadding?: [number, number];
+  fitPadding?: FitPadding;
   /** Where the +/- zoom control sits. Default `'topright'` (bottom is covered by sheets on mobile). */
   zoomControlPosition?: ControlPosition;
   /** Where the OSM attribution sits. Default `'bottomright'`. */
@@ -61,6 +70,15 @@ function MapSkeleton() {
  * Client-only Leaflet map. Renders `MapSkeleton` until the Leaflet bundle has
  * loaded in the browser.
  */
+// Kick off the Leaflet chunk download as soon as a page that uses the map
+// evaluates (i.e. in parallel with hydration and the /api/seed fetch) instead
+// of waiting until the first <MapView /> render. `dynamic()` below resolves the
+// same module from cache. Client-only guard: this module is also evaluated on
+// the server for the SSR pass of pages that import it.
+if (typeof window !== 'undefined') {
+  void import('./MapViewInner');
+}
+
 const MapView = dynamic<MapViewProps>(() => import('./MapViewInner'), {
   ssr: false,
   loading: () => <MapSkeleton />,

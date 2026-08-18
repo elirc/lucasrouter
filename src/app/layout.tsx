@@ -43,6 +43,11 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en" className={inter.variable}>
+      <head>
+        {/* OSM tiles are the map's LCP image: open the connection early. */}
+        <link rel="preconnect" href="https://tile.openstreetmap.org" crossOrigin="anonymous" />
+        <link rel="dns-prefetch" href="https://tile.openstreetmap.org" />
+      </head>
       <body className="min-h-dvh bg-slate-100 font-sans text-slate-900">
         {children}
         <Toast />

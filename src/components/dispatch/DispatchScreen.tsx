@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
-import { MapView } from '@/components/map';
+import { MapView, type FitPadding } from '@/components/map';
 import { BottomSheet, type SheetSnap } from '@/components/ui';
 import { shortAddress } from '@/lib/geo';
 import { useAppStore, useHasHydrated } from '@/store/useAppStore';
@@ -23,8 +23,6 @@ const MemoMapView = memo(MapView);
 
 /** Fit padding: room for the legend on desktop, for the peeking sheet on phones. */
 const DESKTOP_FIT_PADDING: [number, number] = [48, 48];
-const MOBILE_FIT_PADDING: [number, number] = [24, 120];
-
 /**
  * BottomSheet chrome above/below the `header` slot: grab handle area
  * (pt-2 + h-8 + pb-1 = 44px) plus the header wrapper's pb-3 (12px). Added to
@@ -33,6 +31,17 @@ const MOBILE_FIT_PADDING: [number, number] = [24, 120];
  */
 const SHEET_HEADER_CHROME_PX = 56;
 const FALLBACK_PEEK_HEIGHT = 156;
+
+/**
+ * Phones: keep every marker above the peeking bottom sheet (which is `fixed`
+ * over the map). Uses the static peek estimate rather than the measured header
+ * height so the map is fitted exactly once on load (a second fit would request
+ * a fresh set of tiles at another zoom level and delay first paint).
+ */
+const MOBILE_FIT_PADDING: FitPadding = {
+  topLeft: [16, 16],
+  bottomRight: [16, FALLBACK_PEEK_HEIGHT + 16],
+};
 
 /**
  * The dispatcher (`/dispatch`): full-bleed Leaflet map with the planning panel
@@ -69,12 +78,20 @@ export function DispatchScreen() {
   // Measure the sheet header (date/stats/Optimize) so the peek snap shows it
   // exactly, even if the text wraps on very narrow phones. React 19 callback
   // ref with cleanup — re-attached whenever the header mounts/unmounts.
+  // Measurement comes from ResizeObserver entries (delivered after layout) rather
+  // than a synchronous `offsetHeight` read, which would force a full-page reflow
+  // in the middle of the commit that mounts the map (~75 ms on a phone).
   const headerRef = useCallback((el: HTMLDivElement | null) => {
     if (!el) return;
-    const measure = () => setHeaderHeight(el.offsetHeight);
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(measure);
+    if (typeof ResizeObserver === 'undefined') {
+      const frame = requestAnimationFrame(() => setHeaderHeight(el.offsetHeight));
+      return () => cancelAnimationFrame(frame);
+    }
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[0]?.borderBoxSize?.[0];
+      const h = box ? box.blockSize : entries[0]?.contentRect.height;
+      if (h && h > 0) setHeaderHeight((prev) => (Math.abs(prev - h) < 1 ? prev : h));
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -108,7 +125,9 @@ export function DispatchScreen() {
     return Math.max(0, stops.length - assigned);
   }, [routes, stops.length]);
 
-  const fitKey = routes ? (lastOptimizedAt ?? 'optimized') : 'seed';
+  // Re-fit when the plan changes or the layout switches between phone/desktop.
+  const fitKey = `${routes ? (lastOptimizedAt ?? 'optimized') : 'seed'}:${isDesktop ? 'desktop' : 'mobile'}`;
+  const mobilePadding = isDesktop ? DESKTOP_FIT_PADDING : MOBILE_FIT_PADDING;
 
   // ---- gates ---------------------------------------------------------------------------------
   if (!hydrated || !depot) return <DispatchSkeleton />;
@@ -130,7 +149,7 @@ export function DispatchScreen() {
             onSelectStop={setSelectedStop}
             onReassign={handleReassign}
             fitKey={fitKey}
-            fitPadding={isDesktop ? DESKTOP_FIT_PADDING : MOBILE_FIT_PADDING}
+            fitPadding={mobilePadding}
             // The peeking sheet covers the bottom edge on phones: keep the OSM
             // attribution readable by stacking it under the zoom control.
             attributionPosition={isDesktop ? 'bottomright' : 'topright'}

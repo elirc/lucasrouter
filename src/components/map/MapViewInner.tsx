@@ -7,7 +7,7 @@
 import 'leaflet/dist/leaflet.css';
 import './map.css';
 
-import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef } from 'react';
 import { MapContainer, Marker, TileLayer, ZoomControl, AttributionControl } from 'react-leaflet';
 import type { Driver, Route, Stop } from '@/lib/types';
 import { MADISON_CENTER, type LatLng, type LatLngTuple } from '@/lib/geo';
@@ -29,6 +29,7 @@ const OSM_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 const MAP_STYLE = { height: '100%', width: '100%' } as const;
 const EMPTY_IDS: string[] = [];
+const EMPTY_STOPS: StopRender[] = [];
 
 /** Per-stop derived data for rendering markers. */
 interface StopRender {
@@ -162,6 +163,15 @@ function MapViewInner({
     return out;
   }, [focusActive, focus, focusRoute, focusDriver, stops, stopsById, assignment, hiddenSet, driversById, numbered]);
 
+  // Performance: paint the map shell (tiles, depot, viewport) first and stream
+  // the 45 markers + polylines in afterwards as a low-priority transition.
+  // React time-slices deferred renders, so instead of one ~400 ms long task on
+  // a throttled phone we get many short ones and the tiles (the LCP element)
+  // paint much earlier. FitBounds still uses the immediate data so the viewport
+  // is correct before the markers arrive.
+  const deferredStops = useDeferredValue(visibleStops, EMPTY_STOPS);
+  const deferredRoutes = useDeferredValue(routes, null);
+
   const fitPoints = useMemo<LatLng[]>(() => {
     const pts: LatLng[] = visibleStops.map((v) => ({ lat: v.stop.lat, lng: v.stop.lng }));
     pts.push({ lat: depot.lat, lng: depot.lng });
@@ -177,6 +187,9 @@ function MapViewInner({
       <MapContainer
         center={MADISON_CENTER}
         zoom={12}
+        // Fractional zoom lets fitBounds frame all 45 stops tightly on a 375px
+        // phone (integer snapping would fall back to a whole level further out).
+        zoomSnap={0.25}
         zoomControl={false}
         attributionControl={false}
         scrollWheelZoom
@@ -215,9 +228,9 @@ function MapViewInner({
             />
           </>
         ) : null}
-        {!focusActive && routes ? (
+        {!focusActive && deferredRoutes ? (
           <RoutePolylines
-            routes={routes}
+            routes={deferredRoutes}
             drivers={drivers}
             depot={depot}
             stopsById={stopsById}
@@ -228,7 +241,7 @@ function MapViewInner({
 
         {/* Depot + stops */}
         <DepotMarker depot={depot} />
-        {visibleStops.map((v) => (
+        {deferredStops.map((v) => (
           <StopMarker
             key={v.stop.id}
             stop={v.stop}

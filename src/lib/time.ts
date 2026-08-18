@@ -54,11 +54,21 @@ export function formatWindow(w: { start: string; end: string }): string {
   return sSuffix === eSuffix ? `${sTime}–${eTime} ${eSuffix}` : `${s}–${e}`;
 }
 
-/** Long-form date for headers, e.g. "Monday, Aug 17". */
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * Long-form date for headers, e.g. "Monday, Aug 17" (en-US, local time).
+ * Hand-formatted on purpose: the first `Intl.DateTimeFormat` /
+ * `toLocaleDateString` call loads ICU locale data and measured ~180 ms on a
+ * mid-range phone profile — a visible chunk of Total Blocking Time for one
+ * header string.
+ */
 export function formatTodayLong(date: Date = new Date()): string {
-  return date.toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'short',
-    day: 'numeric',
-  });
+  return `${WEEKDAYS[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}`;
+}
+
+/** Wall-clock time of a Date as "6:44 PM" (local time, en-US style, no Intl). */
+export function formatClock(date: Date): string {
+  return to12h(formatHHMM(date.getHours() * 60 + date.getMinutes()));
 }
