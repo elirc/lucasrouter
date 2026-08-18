@@ -76,7 +76,9 @@ pnpm smoke                        # in another; or: pnpm smoke http://localhost:
 
 Or, from the CLI: `npx vercel` (accept the defaults) and `npx vercel --prod`.
 
-(There is no one-click "Deploy with Vercel" button because this repository has no public remote yet; importing the repo in Vercel or running `npx vercel` is the same two-minute job.)
+One-click:
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Felirc%2Flucasrouter&project-name=routeiq&repository-name=lucasrouter)
 
 ## Swapping in the real algorithm
 

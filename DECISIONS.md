@@ -72,7 +72,7 @@ Every entry below is a call made while building RouteIQ that the specification d
 
 ## Deployment
 
-40. No `vercel.json` is needed — default Next.js settings on Vercel work as-is (`git push` → deploy). No environment variables, keys, or databases. The README deliberately has no "Deploy with Vercel" button: the repository has no public remote yet, so a button would point at a placeholder URL; the two-step import / `npx vercel` instructions do the same job.
+40. No `vercel.json` is needed — default Next.js settings on Vercel work as-is (`git push` → deploy). No environment variables, keys, or databases. The README has a one-click "Deploy with Vercel" button pointing at the public repository (`github.com/elirc/lucasrouter`), plus the equivalent import / `npx vercel` instructions.
 41. **Repo hygiene**: `e2e-screens/` (smoke-run screenshots, ~3 MB, regenerated every run) is git-ignored; the five curated screenshots referenced by the README live in `docs/screenshots/`. Scratch scripts are never committed under `scripts/`.
 
 ## Performance (Lighthouse mobile)
