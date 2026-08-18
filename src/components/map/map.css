@@ -1,0 +1,121 @@
+/* RouteIQ map styles — imported by MapViewInner (client only), after leaflet.css. */
+
+/* Our divIcons carry their own visuals; strip Leaflet's default white box. */
+.riq-stop-icon,
+.riq-depot-icon,
+.riq-arrow-icon,
+.riq-here-icon {
+  background: transparent;
+  border: 0;
+}
+
+/* Direction arrows are decoration only. */
+.riq-arrow-icon,
+.riq-here-icon {
+  pointer-events: none;
+}
+
+/* Keyboard focus ring for focusable (keyboard: true) markers. */
+.leaflet-container .leaflet-marker-icon:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+  border-radius: 9999px;
+}
+
+/* "You are here" pulse. */
+@keyframes riq-pulse {
+  0% {
+    transform: scale(0.45);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+.riq-here-halo {
+  animation: riq-pulse 1.8s ease-out infinite;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .riq-here-halo {
+    animation: none;
+    transform: scale(1);
+    opacity: 0.4;
+  }
+}
+
+/* Inherit the app font (Inter via --font-sans) inside the map. */
+.leaflet-container {
+  font-family: inherit;
+  font-size: 0.875rem;
+}
+
+/* Bigger zoom buttons: 44px tap targets. */
+.leaflet-bar a,
+.leaflet-touch .leaflet-bar a {
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+  font-size: 22px;
+}
+.leaflet-touch .leaflet-bar a:first-child {
+  border-top-left-radius: 0.5rem;
+  border-top-right-radius: 0.5rem;
+}
+.leaflet-touch .leaflet-bar a:last-child {
+  border-bottom-left-radius: 0.5rem;
+  border-bottom-right-radius: 0.5rem;
+}
+.leaflet-touch .leaflet-bar,
+.leaflet-touch .leaflet-control-layers {
+  border: 1px solid rgb(226 232 240); /* slate-200 */
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
+}
+.leaflet-bar a:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+}
+
+/* Popups: card-like, tighter content, larger close hit-area. */
+.riq-popup .leaflet-popup-content-wrapper {
+  border-radius: 0.75rem;
+  box-shadow: 0 6px 20px rgb(15 23 42 / 0.18);
+  color: rgb(15 23 42);
+  padding: 0;
+}
+.riq-popup .leaflet-popup-content {
+  margin: 12px 14px;
+  line-height: 1.4;
+  min-width: 200px;
+}
+.riq-popup .leaflet-popup-content p {
+  margin: 0;
+}
+.riq-popup .leaflet-popup-tip-container {
+  margin-top: -1px;
+}
+.riq-popup a.leaflet-popup-close-button {
+  top: 2px;
+  right: 2px;
+  width: 36px;
+  height: 36px;
+  font-size: 22px;
+  line-height: 36px;
+  color: rgb(100 116 139);
+  border-radius: 9999px;
+}
+.riq-popup a.leaflet-popup-close-button:hover,
+.riq-popup a.leaflet-popup-close-button:focus-visible {
+  color: rgb(15 23 42);
+  background: rgb(241 245 249);
+  outline: none;
+}
+
+/* Attribution: keep it readable but unobtrusive. */
+.leaflet-container .leaflet-control-attribution {
+  font-size: 10px;
+  background: rgb(255 255 255 / 0.8);
+  border-top-left-radius: 0.375rem;
+}
