@@ -1,0 +1,60 @@
+/*
+ * Driver-app motion. Imported once by DriverRouteScreen (App Router allows
+ * global CSS imports from any client component; the map module does the same
+ * with map.css). Kept tiny and prefixed `driver-` so nothing here can collide
+ * with Tailwind utilities or other modules.
+ */
+
+/* Next-stop card: subtle fade + rise when the card advances (keyed by stop id). */
+@keyframes driver-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Dialog panel slides up from the bottom edge (phone sheet feel). */
+@keyframes driver-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Dialog backdrop fades in. */
+@keyframes driver-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.driver-fade-in {
+  animation: driver-fade-in 220ms ease-out both;
+}
+
+.driver-sheet-in {
+  animation: driver-sheet-in 200ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.driver-backdrop-in {
+  animation: driver-backdrop-in 160ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .driver-fade-in,
+  .driver-sheet-in,
+  .driver-backdrop-in {
+    animation: none;
+  }
+}
