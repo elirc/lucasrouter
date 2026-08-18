@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
 
 import { DriverRouteScreen } from '@/components/driver/DriverRouteScreen';
+import { DRIVERS } from '@/data';
 
 export const metadata: Metadata = {
   title: 'My route · RouteIQ',
@@ -12,8 +14,25 @@ interface DriverRoutePageProps {
   params: Promise<{ id: string }>;
 }
 
-/** `/driver/[id]` — server wrapper that resolves params and renders the client screen. */
+/**
+ * The roster is static, so prerender the three driver pages. Besides being
+ * faster to serve, a prerendered page has its whole <head> assembled before
+ * it is sent — a dynamically streamed page flushes </head> before the body
+ * render reaches `MapSkeleton`, and the OSM `preconnect` and the placeholder
+ * image preload it hoists would then be dropped instead of emitted.
+ */
+export function generateStaticParams(): { id: string }[] {
+  return DRIVERS.map((d) => ({ id: d.id }));
+}
+
+/**
+ * `/driver/[id]` — server wrapper that resolves params and renders the client
+ * screen. Ids that are not in the (static) roster are a real 404 - the client
+ * screen keeps its own "Driver not found" state as a belt-and-braces fallback.
+ */
 export default async function DriverRoutePage({ params }: DriverRoutePageProps) {
   const { id } = await params;
-  return <DriverRouteScreen driverId={decodeURIComponent(id)} />;
+  const driverId = decodeURIComponent(id);
+  if (!DRIVERS.some((d) => d.id === driverId)) notFound();
+  return <DriverRouteScreen driverId={driverId} />;
 }

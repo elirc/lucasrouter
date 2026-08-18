@@ -68,7 +68,8 @@ export function bearingDeg(from: Point, to: Point): number {
  * is `stops[i - 1]`. Sequencing / repair read drive minutes straight off this
  * matrix via `driveMinutes`, so the matrix and the scheduled legs agree.
  *
- * O(n^2) but n is tiny (46 points -> ~1k haversines, well under a millisecond).
+ * O(n^2): ~1k haversines for the 46-point seed (well under a millisecond),
+ * ~1M at the API cap of 1000 stops (a few tens of milliseconds).
  */
 export function buildDistanceMatrix(points: Point[]): Matrix {
   const n = points.length;

@@ -11,7 +11,19 @@ self.addEventListener('install', () => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    (async () => {
+      // Navigation preload: the browser issues the navigation request in
+      // parallel with booting this worker instead of after it. Without it every
+      // navigation on a repeat visit waits for service-worker startup (tens to
+      // hundreds of ms on a phone) before the HTML is even requested — a cost
+      // this worker would otherwise add for no benefit, since it does not cache.
+      if (self.registration.navigationPreload) {
+        await self.registration.navigationPreload.enable().catch(() => {});
+      }
+      await self.clients.claim();
+    })(),
+  );
 });
 
 const OFFLINE_HTML = `<!doctype html>
@@ -42,12 +54,18 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   event.respondWith(
-    fetch(req).catch(
-      () =>
-        new Response(OFFLINE_HTML, {
+    (async () => {
+      try {
+        // Whatever the browser already started fetching while this worker woke up.
+        const preloaded = await event.preloadResponse;
+        if (preloaded) return preloaded;
+        return await fetch(req);
+      } catch {
+        return new Response(OFFLINE_HTML, {
           status: 503,
           headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
-        }),
-    ),
+        });
+      }
+    })(),
   );
 });

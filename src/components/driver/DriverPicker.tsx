@@ -7,7 +7,7 @@ import { useEffect, useMemo } from 'react';
 import { Logo, Skeleton, Toast } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { onColor } from '@/lib/color';
-import { formatDuration } from '@/lib/time';
+import { formatDuration, to12h } from '@/lib/time';
 import type { Driver, Route, Stop } from '@/lib/types';
 import { driverProgress, useAppStore, useHasHydrated } from '@/store/useAppStore';
 
@@ -98,8 +98,7 @@ export function DriverPicker() {
         {ready && routes === null && (
           // slate-600 (not 500): this sits on the slate-100 page ground.
           <p className="mt-6 text-center text-xs text-slate-600">
-            Routes have not been optimized yet — the dispatcher runs the optimizer, or you can start a demo
-            optimization from your route screen.
+            No routes have been planned yet — pick your name and today&apos;s route is prepared for you.
           </p>
         )}
       </main>
@@ -120,11 +119,27 @@ interface DriverPickCardProps {
 function DriverPickCard({ driver, route, routesReady, stopsById, lastUsed, onPick }: DriverPickCardProps) {
   const progress = driverProgress(route, stopsById);
   const n = route?.stopIds.length ?? 0;
-  const facts = !routesReady
-    ? 'No route yet'
+  const complete = routesReady && progress.total > 0 && progress.nextIndex === -1;
+  // What's next for this driver: the ETA of their first still-pending stop.
+  const nextEta =
+    route && progress.nextIndex >= 0 ? route.etaByStopId[route.stopIds[progress.nextIndex]] : undefined;
+  // Two short lines beat one truncated one on a 375 px phone (the "Continue"
+  // button on the last-used card leaves ~200 px for text).
+  const stopsLine = !routesReady
+    ? 'Not planned yet'
     : n === 0
       ? 'No stops assigned'
-      : `${n} ${n === 1 ? 'stop' : 'stops'} · ${formatDuration(route?.totalMinutes ?? 0)}`;
+      : `${n} ${n === 1 ? 'stop' : 'stops'}`;
+  const planned = formatDuration(route?.totalMinutes ?? 0);
+  const nextLine = !routesReady
+    ? 'Tap to prepare your route'
+    : n === 0
+      ? null
+      : complete
+        ? 'All stops done'
+        : `${nextEta ? `Next ${to12h(nextEta)} · ` : ''}${planned}`;
+  const facts = [stopsLine, nextLine].filter(Boolean).join(', ');
+  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const initials = driver.name
     .split(' ')
     .map((p) => p[0])
@@ -139,7 +154,15 @@ function DriverPickCard({ driver, route, routesReady, stopsById, lastUsed, onPic
     <Link
       href={`/driver/${driver.id}`}
       onClick={onPick}
-      aria-label={`${driver.name}, ${driver.vehicle}, ${facts}${lastUsed ? ', last used' : ''}`}
+      aria-label={[
+        driver.name,
+        driver.vehicle,
+        facts,
+        progress.done > 0 && !complete ? `${progress.done} of ${progress.total} done` : null,
+        lastUsed ? 'last used, continue' : null,
+      ]
+        .filter(Boolean)
+        .join(', ')}
       className={cn(
         'group flex min-h-[72px] w-full items-center gap-3 rounded-xl border bg-white px-4 py-3 text-left shadow-sm transition-all',
         'hover:border-slate-300 hover:shadow-md active:translate-y-px active:shadow-sm',
@@ -156,31 +179,45 @@ function DriverPickCard({ driver, route, routesReady, stopsById, lastUsed, onPic
         {initials}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          <span className="truncate text-base font-semibold text-slate-900">{driver.name}</span>
-          {lastUsed && (
-            <span
-              className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4"
-              style={{ backgroundColor: driver.color, color: fg }}
-            >
-              Last used
-            </span>
-          )}
-        </span>
+        {/* No "Last used" pill: the coloured ring + the Continue button on the
+            right already say it, and 375 px has no room for all three. */}
+        <span className="block truncate text-base font-semibold text-slate-900">{driver.name}</span>
         <span className="mt-0.5 block truncate text-sm text-slate-600 tabular-nums">
-          {driver.vehicle} · {facts}
+          {driver.vehicle} · {stopsLine}
         </span>
-        {routesReady && progress.total > 0 && progress.done > 0 && (
-          <span className="mt-0.5 block text-xs font-medium text-emerald-700 tabular-nums">
-            {progress.done} of {progress.total} done
-            {progress.failed > 0 && <span className="text-red-600"> · {progress.failed} failed</span>}
-          </span>
+        {nextLine && <span className="block truncate text-xs text-slate-600 tabular-nums">{nextLine}</span>}
+        {routesReady && progress.total > 0 && (progress.done > 0 || complete) && (
+          <>
+            {/* Progress is decoration here (the numbers below carry it), so the
+                bar is aria-hidden — the link's own label states the counts. */}
+            <span aria-hidden="true" className="mt-1.5 block h-1 w-full rounded-full bg-slate-200">
+              <span
+                className="block h-full rounded-full transition-[width] duration-300 ease-out"
+                style={{ width: `${pct}%`, backgroundColor: complete ? '#047857' : driver.color }}
+              />
+            </span>
+            <span className="mt-1 block text-xs font-medium text-emerald-700 tabular-nums">
+              {complete ? 'Route complete' : `${progress.done} of ${progress.total} done`}
+              {progress.failed > 0 && <span className="text-red-600"> · {progress.failed} failed</span>}
+            </span>
+          </>
         )}
       </span>
-      <ChevronRight
-        className="size-5 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5"
-        aria-hidden="true"
-      />
+      {lastUsed ? (
+        // The obvious next tap for whoever used this phone last.
+        <span
+          aria-hidden="true"
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white"
+        >
+          Continue
+          <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
+        </span>
+      ) : (
+        <ChevronRight
+          className="size-5 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5"
+          aria-hidden="true"
+        />
+      )}
     </Link>
   );
 }

@@ -28,7 +28,8 @@
 // late pass only moves when violations strictly decrease; the idle pass never
 // increases violations and strictly decreases (depot arrival, sum of arrivals)
 // lexicographically, so each pass walks a finite strictly-monotone chain -
-// and every loop is capped anyway.
+// and every loop is capped anyway (iterations, rounds, route length and a
+// wall-clock budget, see the constants below).
 //
 // This is a local heuristic: it will not always reach zero violations (a route
 // can simply have too many stops for the windows), and it accepts a slightly
@@ -58,11 +59,28 @@ export const MAX_REPAIR_ROUNDS = 20;
 /**
  * The idle pass evaluates every single-stop relocation (O(n^2) candidates, each
  * an O(n) simulation) per iteration. That is instant for a 15-stop route but
- * cubic, so routes longer than this only get the (cheaper, violation-driven)
- * late pass. The API caps requests at 1000 stops; a production solver would
- * replace this whole file anyway.
+ * cubic, so routes longer than this skip it and only get the late pass.
  */
 export const MAX_IDLE_PASS_STOPS = 120;
+
+/**
+ * The late pass is cheaper only while few stops are late: on a long route
+ * (hundreds of stops, most of them past their windows) it degenerates to the
+ * same cubic scan and could run for minutes on a schema-valid request. Routes
+ * longer than this skip it as well - a single route of that length is far
+ * beyond a working day anyway.
+ */
+export const MAX_LATE_PASS_STOPS = 300;
+
+/**
+ * Wall-clock budget for the whole repair stage of ONE optimisation request
+ * (shared by all drivers, see `optimize()`). When it runs out the current pass
+ * stops after its current iteration and the route is returned as repaired so
+ * far - still a valid order, just with more violations left. This is what keeps
+ * `POST /api/optimize` inside a serverless function's time limit no matter
+ * what the request looks like. The seed data uses ~5-40 ms of it.
+ */
+export const REPAIR_TIME_BUDGET_MS = 1500;
 
 /** Improvements smaller than this (minutes / km) are treated as zero. */
 const EPSILON = 1e-6;
@@ -124,11 +142,6 @@ function evaluate(order: number[], ctx: RepairContext): Evaluation {
   return { violations: sim.violations, late, wait, depotArrivalMin: sim.depotArrivalMin, sumArrivalMin };
 }
 
-/** Number of stops in `order` that would be reached after their window closes. */
-export function countViolations(order: number[], ctx: RouteContext): number {
-  return evaluate(order, prepare(ctx)).violations;
-}
-
 /**
  * Move `order[from]` to position `to` (either direction), shifting the stops in
  * between one place. Returns a new array; the input is not mutated.
@@ -149,12 +162,15 @@ function latePass(
   order: number[],
   ctx: RepairContext,
   maxIterations: number,
+  deadline: number,
 ): { order: number[]; changed: boolean } {
   let current = order;
   let changed = false;
+  if (current.length > MAX_LATE_PASS_STOPS) return { order: current, changed };
   let { violations, late } = evaluate(current, ctx);
 
   for (let iter = 0; iter < maxIterations && violations > 0; iter++) {
+    if (performance.now() > deadline) break; // out of time - keep what we have
     let best: { order: number[]; violations: number; late: boolean[]; distance: number } | null = null;
 
     for (let from = 0; from < current.length; from++) {
@@ -207,6 +223,7 @@ function idlePass(
   order: number[],
   ctx: RepairContext,
   maxIterations: number,
+  deadline: number,
 ): { order: number[]; changed: boolean } {
   let current = order;
   let changed = false;
@@ -215,6 +232,7 @@ function idlePass(
 
   for (let iter = 0; iter < maxIterations; iter++) {
     if (!ev.wait.some((w) => w > EPSILON)) break; // nobody idles -> nothing to do
+    if (performance.now() > deadline) break; // out of time - keep what we have
 
     let best: { order: number[]; ev: Evaluation; distance: number } | null = null;
 
@@ -254,12 +272,16 @@ function idlePass(
  * (possibly unchanged) order and the number of violations that remain.
  *
  * `maxIterations` caps each pass; the alternation is capped by
- * `MAX_REPAIR_ROUNDS`.
+ * `MAX_REPAIR_ROUNDS`; `deadline` (a `performance.now()` timestamp, default
+ * "now + REPAIR_TIME_BUDGET_MS") stops the passes early on pathological
+ * inputs. Callers optimising several drivers share one deadline so the whole
+ * request stays bounded.
  */
 export function repairTimeWindows(
   order: number[],
   ctx: RouteContext,
   maxIterations: number = MAX_REPAIR_ITERATIONS,
+  deadline: number = performance.now() + REPAIR_TIME_BUDGET_MS,
 ): RepairResult {
   let current = order.slice();
   const rctx = prepare(ctx);
@@ -268,10 +290,11 @@ export function repairTimeWindows(
   }
 
   for (let round = 0; round < MAX_REPAIR_ROUNDS; round++) {
-    const late = latePass(current, rctx, maxIterations);
-    const idle = idlePass(late.order, rctx, maxIterations);
+    const late = latePass(current, rctx, maxIterations, deadline);
+    const idle = idlePass(late.order, rctx, maxIterations, deadline);
     current = idle.order;
     if (!late.changed && !idle.changed) break; // fixed point
+    if (performance.now() > deadline) break; // budget exhausted
   }
 
   return { order: current, violations: evaluate(current, rctx).violations };

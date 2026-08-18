@@ -1,6 +1,6 @@
-// GET /api/seed - the demo dataset (depot, drivers, stops). The store calls this
-// on first load and falls back to the bundled `getSeed()` if it fails, so the
-// two are guaranteed to be identical.
+// GET /api/seed - the demo dataset (depot, drivers, stops), for API consumers.
+// The app itself uses the bundled `getSeed()` (same data, no round trip), so
+// the two are guaranteed to be identical.
 
 import { NextResponse } from 'next/server';
 import { getSeed } from '@/data';

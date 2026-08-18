@@ -27,9 +27,11 @@ const FOCUSABLE =
  *   and Escape arrives as a `cancel` event. Rendered as a bottom sheet capped
  *   to the 480px phone column so it lines up with the page.
  * - `aria-modal` + labelled by the heading; backdrop click closes.
- * - On open, focus moves to the first `[data-autofocus]` element (or the
- *   first focusable control); Tab wraps inside the panel; on close, focus
- *   returns to whatever was focused before (when it still exists).
+ * - On open, focus moves to the first `[data-autofocus]` element, or — when a
+ *   sheet deliberately marks nothing (the outcome sheets: a held Enter must not
+ *   auto-activate anything) — to the panel itself. Tab wraps inside the panel;
+ *   on close the dialog is closed explicitly and focus returns to whatever was
+ *   focused before (when it still exists).
  * - The page behind is scroll-locked with the `position: fixed` body
  *   technique (the only one iOS Safari honours; `overflow: hidden` alone lets
  *   the page rubber-band and jump), and the document scrollbar track is kept
@@ -91,6 +93,16 @@ function DialogPanel({ onClose, title, description, children, className }: Drive
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+  /**
+   * Set while WE close the dialog (in the effect cleanup below), so the
+   * resulting `close` event is not reported to the parent as "the user closed
+   * the sheet". It has to be a ref rather than a local because `close()` fires
+   * its event from a QUEUED TASK, not synchronously: under StrictMode the
+   * cleanup and the second setup both run before that task, so the event lands
+   * on the *second* run's listener — and the sheet slammed shut the instant it
+   * opened. The ref survives that re-run (same component instance).
+   */
+  const selfClosingRef = useRef(false);
 
   // Open as a modal + focus management + Escape + scroll lock (mount/unmount).
   useEffect(() => {
@@ -102,10 +114,12 @@ function DialogPanel({ onClose, title, description, children, className }: Drive
     if (!dialog.open) dialog.showModal();
 
     const panel = panelRef.current;
-    const target =
-      panel?.querySelector<HTMLElement>('[data-autofocus]') ??
-      panel?.querySelector<HTMLElement>(FOCUSABLE) ??
-      panel;
+    // No `[data-autofocus]` means "focus the sheet itself", NOT "focus the
+    // first control": the first control is the Close button, so holding Enter
+    // on the card's "Delivered" auto-repeated onto Close and dismissed the
+    // proof sheet without recording anything. The panel carries tabIndex={-1}
+    // for exactly this, and a screen reader reads the dialog from its heading.
+    const target = panel?.querySelector<HTMLElement>('[data-autofocus]') ?? panel;
     // Defer one frame so the slide-in animation has started and layout is final.
     const raf = requestAnimationFrame(() => target?.focus({ preventScroll: true }));
 
@@ -117,7 +131,13 @@ function DialogPanel({ onClose, title, description, children, className }: Drive
       e.preventDefault();
       onCloseRef.current();
     };
-    const onNativeClose = () => onCloseRef.current();
+    const onNativeClose = () => {
+      if (selfClosingRef.current) {
+        selfClosingRef.current = false; // our own cleanup close, not the user's
+        return;
+      }
+      onCloseRef.current();
+    };
     dialog.addEventListener('cancel', onCancel);
     dialog.addEventListener('close', onNativeClose);
 
@@ -128,9 +148,23 @@ function DialogPanel({ onClose, title, description, children, className }: Drive
       dialog.removeEventListener('cancel', onCancel);
       dialog.removeEventListener('close', onNativeClose);
       unlockScroll();
-      // Removing an open modal dialog from the DOM drops it from the top layer;
-      // no close() needed. Return focus if the opener still exists (after
-      // Delivered/Failed the parent moves focus to the new card instead).
+      // Close before unmounting. Removing an open modal from the DOM does drop
+      // it from the top layer, but leaving it open breaks StrictMode's
+      // double-invoked effect: the second run starts while the first dialog is
+      // still open and focused, so it captures an element INSIDE the dialog as
+      // `previouslyFocused`, and on close focus falls to <body> instead of
+      // returning to the button that opened the sheet.
+      if (dialog.open) {
+        selfClosingRef.current = true;
+        try {
+          dialog.close();
+        } catch {
+          // Some browsers throw if the dialog is mid-removal; nothing to do.
+          selfClosingRef.current = false;
+        }
+      }
+      // Return focus if the opener still exists (after Delivered/Failed the
+      // parent moves focus to the new card instead).
       if (previouslyFocused && previouslyFocused.isConnected) {
         previouslyFocused.focus({ preventScroll: true });
       }

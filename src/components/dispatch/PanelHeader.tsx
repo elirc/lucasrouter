@@ -33,6 +33,7 @@ export function PanelHeader({ className }: PanelHeaderProps) {
   const optimizeError = useAppStore((s) => s.optimizeError);
   const algorithm = useAppStore((s) => s.algorithm);
   const lastOptimizedAt = useAppStore((s) => s.lastOptimizedAt);
+  const editedSinceOptimize = useAppStore((s) => s.editedSinceOptimize);
   const optimize = useAppStore((s) => s.optimize);
 
   // Evaluated once on the client (this component only mounts after hydration).
@@ -47,10 +48,11 @@ export function PanelHeader({ className }: PanelHeaderProps) {
   );
 
   const hasRoutes = routes !== null;
-  const optimizedLine =
-    hasRoutes && lastOptimizedAt
-      ? `Optimized ${formatClock(lastOptimizedAt)}${algorithm ? ` · ${algorithm}` : ''}`
-      : 'Not yet optimized';
+  const optimizedLine = !hasRoutes
+    ? 'Not yet optimized'
+    : !lastOptimizedAt
+      ? 'Assigned by hand · not yet optimized'
+      : `Optimized ${formatClock(lastOptimizedAt)}${algorithm ? ` · ${algorithm}` : ''}${editedSinceOptimize ? ' · edited by hand' : ''}`;
 
   return (
     <div className={cn('text-slate-900', className)}>
@@ -82,7 +84,7 @@ export function PanelHeader({ className }: PanelHeaderProps) {
         // press on it never starts a drag (BottomSheet also skips buttons).
         data-no-drag
       >
-        {isOptimizing ? 'Optimizing…' : hasRoutes ? 'Re-optimize routes' : 'Optimize routes'}
+        {isOptimizing ? 'Optimizing…' : lastOptimizedAt ? 'Re-optimize routes' : 'Optimize routes'}
       </Button>
 
       {optimizeError && (

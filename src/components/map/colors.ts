@@ -14,5 +14,5 @@ export const DELIVERED_COLOR = '#16a34a';
 export const FAILED_COLOR = '#dc2626';
 /** Depot marker fill (slate-900). */
 export const DEPOT_COLOR = '#0f172a';
-/** "You are here" dot (blue-600). */
+/** Leg-start dot on the driver map (blue-600). */
 export const HERE_COLOR = '#2563eb';

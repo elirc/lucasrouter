@@ -98,7 +98,7 @@ describe('POST /api/optimize validation', () => {
     expect(body2.issues.some((i) => i.path === 'drivers' && /At most 50 drivers/.test(i.message))).toBe(true);
   });
 
-  it('still accepts exactly 1000 unique stops', async () => {
+  it('still accepts exactly 1000 unique stops (windows off: sequencing only)', async () => {
     const stops = Array.from({ length: 1000 }, (_, i) => stopLike(`X${i}`, i));
     // Big capacities so nothing is left unassigned and the response is trivially checkable.
     const drivers = seed.drivers.map((d) => ({ ...d, capacityPackages: 100000 }));
@@ -108,6 +108,32 @@ describe('POST /api/optimize validation', () => {
     const ids = [...json.routes.flatMap((r) => r.stopIds), ...json.unassignedStopIds];
     expect(ids).toHaveLength(1000);
     expect(new Set(ids).size).toBe(1000);
+  }, 60_000);
+
+  it('stays within a few seconds at the cap WITH time windows (repair budget), 3 drivers', async () => {
+    // Long routes where most windowed stops are late: the worst case for the
+    // repair pass. Must finish quickly thanks to REPAIR_TIME_BUDGET_MS / size caps.
+    const stops = Array.from({ length: 1000 }, (_, i) => ({
+      ...stopLike(`X${i}`, i),
+      timeWindow: i % 3 === 0 ? { start: '09:00', end: '11:00' } : undefined,
+    }));
+    const drivers = seed.drivers.map((d) => ({ ...d, capacityPackages: 100000 }));
+    const t0 = performance.now();
+    const res = await post({ ...seed, drivers, stops });
+    const elapsed = performance.now() - t0;
+    expect(res.status).toBe(200);
+    expect(elapsed).toBeLessThan(8000);
+    const json = (await res.json()) as OptimizeResponse;
+    const ids = [...json.routes.flatMap((r) => r.stopIds), ...json.unassignedStopIds];
+    expect(new Set(ids).size).toBe(1000);
+    // Multi-day routes: ETAs never wrap, so they can exceed "23:59".
+    for (const r of json.routes) {
+      const mins = r.stopIds.map((id) => r.etaByStopId[id]).map((s) => {
+        const [h, m] = s.split(':').map(Number);
+        return h * 60 + m;
+      });
+      for (let i = 1; i < mins.length; i++) expect(mins[i]).toBeGreaterThanOrEqual(mins[i - 1]);
+    }
   }, 60_000);
 });
 
@@ -150,6 +176,37 @@ describe('POST /api/optimize schema details', () => {
     // Single-digit hours are fine.
     const ok = { ...seed, drivers: seed.drivers.map((d, i) => (i === 0 ? { ...d, shiftStart: '8:00' } : d)) };
     expect((await post(ok)).status).toBe(200);
+  });
+
+  it('rejects inverted time windows (end before start)', async () => {
+    const stops = seed.stops.map((s, i) => (i === 0 ? { ...s, timeWindow: { start: '15:00', end: '09:00' } } : s));
+    const res = await post({ ...seed, stops });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorBody;
+    expect(body.issues.some((i) => i.path === 'stops.0.timeWindow.end' && /before its start/.test(i.message))).toBe(true);
+    // Equal start/end is allowed (a point-in-time window).
+    const ok = await post({ ...seed, stops: seed.stops.map((s, i) => (i === 0 ? { ...s, timeWindow: { start: '09:00', end: '09:00' } } : s)) });
+    expect(ok.status).toBe(200);
+  });
+
+  it('bounds numeric fields so schema-valid input cannot yield NaN / absurd output', async () => {
+    const tiny = await post({ ...seed, options: { avgSpeedKmh: 5e-324 } });
+    expect(tiny.status).toBe(400);
+    const fast = await post({ ...seed, options: { avgSpeedKmh: 10_000 } });
+    expect(fast.status).toBe(400);
+    const okSpeed = await post({ ...seed, options: { avgSpeedKmh: 45 } });
+    expect(okSpeed.status).toBe(200);
+
+    const service = await post({ ...seed, stops: seed.stops.map((s, i) => (i === 0 ? { ...s, serviceMinutes: 1e308 } : s)) });
+    expect(service.status).toBe(400);
+    const packages = await post({ ...seed, stops: seed.stops.map((s, i) => (i === 0 ? { ...s, packages: 1e9 } : s)) });
+    expect(packages.status).toBe(400);
+    const capacity = await post({ ...seed, drivers: seed.drivers.map((d, i) => (i === 0 ? { ...d, capacityPackages: 1e12 } : d)) });
+    expect(capacity.status).toBe(400);
+    const color = await post({ ...seed, drivers: seed.drivers.map((d, i) => (i === 0 ? { ...d, color: 'blue' } : d)) });
+    expect(color.status).toBe(400);
+    const shortHex = await post({ ...seed, drivers: seed.drivers.map((d, i) => (i === 0 ? { ...d, color: '#25f' } : d)) });
+    expect(shortHex.status).toBe(200);
   });
 
   it('rejects out-of-range coordinates, negative packages and unknown enums', async () => {

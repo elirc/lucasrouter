@@ -214,7 +214,7 @@ function StopMarkerImpl({
 
           {stop.notes ? <p className="text-xs italic text-slate-600">{stop.notes}</p> : null}
 
-          {onReassign && drivers.length > 0 ? (
+          {onReassign && drivers.length > 0 && stop.status === 'pending' ? (
             <div className="pt-1">
               <label htmlFor={selectId} className="mb-1 block text-xs font-medium text-slate-700">
                 Reassign to…

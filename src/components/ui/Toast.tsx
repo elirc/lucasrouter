@@ -38,6 +38,10 @@ export interface ToastProps {
  * from the store, auto-dismisses after 3.5 s (timer resets whenever a new
  * toast id arrives), and animates in (keyframe, replayed per toast id via
  * `key`) and out (transition while the previous toast lingers for EXIT_MS).
+ *
+ * A toast may carry ONE action (`showToast(msg, tone, { label, onAction })`) —
+ * the driver app's "Undo" after a delivery. It is a real button inside the
+ * live region, so screen readers announce "Delivered · … Undo".
  */
 export function Toast({ bottomOffset = 0 }: ToastProps) {
   const toast = useAppStore((s) => s.toast);
@@ -87,6 +91,23 @@ export function Toast({ bottomOffset = 0 }: ToastProps) {
         >
           <Icon className="size-4 shrink-0" aria-hidden="true" />
           <span className="min-w-0 flex-1">{shown.message}</span>
+          {shown.action && (
+            // Optional single action (e.g. "Undo" after a delivery). Dismisses
+            // the toast itself so the action cannot be triggered twice; the
+            // underline keeps it distinguishable from the message without
+            // relying on colour alone.
+            <button
+              type="button"
+              onClick={() => {
+                const run = shown.action?.onAction;
+                dismissToast();
+                run?.();
+              }}
+              className="-my-2 flex min-h-[44px] shrink-0 items-center rounded-lg px-2 font-semibold text-white underline underline-offset-2 hover:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+            >
+              {shown.action.label}
+            </button>
+          )}
           <button
             type="button"
             onClick={dismissToast}

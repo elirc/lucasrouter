@@ -1,7 +1,7 @@
 'use client';
 
-import { Check, Clock, MapPin, Package, X } from 'lucide-react';
-import type { Ref } from 'react';
+import { Check, Clock, MapPin, MoveDown, Package, X } from 'lucide-react';
+import { useLayoutEffect, useRef, type Ref } from 'react';
 
 import { Button, Card, PriorityBadge } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -21,6 +21,8 @@ export interface NextStopCardProps {
   eta?: string;
   onDelivered: () => void;
   onFailed: () => void;
+  /** "Skip for now" — move this stop to the end of the route. Hidden when absent. */
+  onSkip?: () => void;
   /**
    * Ref to the address heading (`tabIndex={-1}`) so the parent can move
    * keyboard focus onto the new card after Delivered/Failed re-mounts it.
@@ -28,6 +30,15 @@ export interface NextStopCardProps {
   headingRef?: Ref<HTMLHeadingElement>;
   className?: string;
 }
+
+/**
+ * Presses on Delivered / Failed within this many ms of the card appearing are
+ * ignored. The card is keyed on the stop id, so after a tap the NEXT stop's
+ * card mounts in the same place with the same buttons; an accidental double
+ * tap (or a held Enter key auto-repeating) would otherwise mark two stops.
+ * Longer than the 220 ms fade-in, shorter than any deliberate second tap.
+ */
+export const ACTION_SETTLE_MS = 400;
 
 /** True when the planned arrival is after the end of the stop's time window. */
 export function isEtaLate(eta: string | undefined, window: Stop['timeWindow']): boolean {
@@ -41,9 +52,10 @@ export function isEtaLate(eta: string | undefined, window: Stop['timeWindow']): 
 
 /**
  * The dominant card of the driver screen: everything a driver needs about the
- * stop in front of them plus the two big outcome buttons and a Navigate link.
- * Parents `key` this on `stop.id` so it re-mounts (and fades in) as the route
- * advances.
+ * stop in front of them, the two big outcome buttons (Delivered opens the
+ * proof-of-delivery sheet, Failed the reason sheet) and, quieter beneath them,
+ * Navigate and "Skip for now". Parents `key` this on `stop.id` so it re-mounts
+ * (and fades in) as the route advances.
  */
 export function NextStopCard({
   stop,
@@ -53,12 +65,34 @@ export function NextStopCard({
   eta,
   onDelivered,
   onFailed,
+  onSkip,
   headingRef,
   className,
 }: NextStopCardProps) {
   const late = isEtaLate(eta, stop.timeWindow);
   // A stale "<reason> · " prefix (failed → undone) is not a delivery note.
   const { note } = splitFailureNotes(stop.notes);
+
+  // Mount time (see ACTION_SETTLE_MS), stamped in a layout effect: that runs
+  // synchronously inside the commit that mounts the card, i.e. before the
+  // browser can deliver any event to the new buttons.
+  const mountedAtRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    mountedAtRef.current = performance.now();
+  }, []);
+  const settled = () =>
+    mountedAtRef.current !== null && performance.now() - mountedAtRef.current >= ACTION_SETTLE_MS;
+  const handleDelivered = () => {
+    if (settled()) onDelivered();
+  };
+  const handleFailed = () => {
+    if (settled()) onFailed();
+  };
+  // Skip re-mounts the card too (a different stop becomes "next"), so it is
+  // gated by the same settle window as the two big buttons.
+  const handleSkip = () => {
+    if (settled()) onSkip?.();
+  };
   return (
     <Card
       className={cn('driver-fade-in overflow-hidden p-4', className)}
@@ -122,7 +156,7 @@ export function NextStopCard({
           variant="primary"
           className="h-[52px]"
           icon={<Check className="size-5" strokeWidth={2.5} />}
-          onClick={onDelivered}
+          onClick={handleDelivered}
           aria-label={`Mark ${stop.address} delivered`}
         >
           Delivered
@@ -134,12 +168,14 @@ export function NextStopCard({
           // Danger-outline look; inline colours win over the variant's slate ones.
           style={{ borderColor: '#fca5a5', color: '#b91c1c' }}
           icon={<X className="size-5" strokeWidth={2.5} />}
-          onClick={onFailed}
+          onClick={handleFailed}
           aria-label={`Mark ${stop.address} failed`}
         >
           Failed
         </Button>
       </div>
+      {/* Tertiary row: Navigate keeps its weight, Skip stays deliberately
+          quiet so the two outcome buttons above remain the obvious choice. */}
       <NavigateLink
         lat={stop.lat}
         lng={stop.lng}
@@ -149,6 +185,18 @@ export function NextStopCard({
       >
         Navigate
       </NavigateLink>
+      {onSkip && (
+        <Button
+          variant="ghost"
+          fullWidth
+          className="mt-1 text-slate-600"
+          icon={<MoveDown className="size-4" />}
+          onClick={handleSkip}
+          aria-label={`Skip ${stop.address} for now, moving it to the end of the route`}
+        >
+          Skip for now
+        </Button>
+      )}
     </Card>
   );
 }

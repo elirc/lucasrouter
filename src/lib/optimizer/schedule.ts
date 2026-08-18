@@ -6,7 +6,7 @@
 // directly after a manual drag-and-drop reassignment, so nothing in here may
 // depend on the assignment / sequencing stages.
 //
-// ETA rules (see CONTEXT.md):
+// ETA rules (mirrored in docs/ALGORITHM_INTEGRATION.md):
 //   * clock starts at `driver.shiftStart`;
 //   * arrival = previous departure + drive minutes for the leg;
 //   * arriving before `timeWindow.start` means the driver WAITS: arrival is
@@ -15,7 +15,9 @@
 //     `timeWindow.end` IS a violation;
 //   * departure = arrival + serviceMinutes;
 //   * the last leg returns to the depot; `totalMinutes` = depot arrival - shift
-//     start, i.e. drive + service + waiting.
+//     start, i.e. drive + service + waiting;
+//   * ETAs are "HH:MM" on the shift day's clock and keep counting past
+//     midnight ("25:13"), so they stay monotonic and comparable to the windows.
 //
 // Distances: every km here is ESTIMATED ROAD km (`estimatedRoadKm` = haversine
 // x ROAD_FACTOR, see distance.ts); drive minutes = road km / avgSpeedKmh * 60.
@@ -220,8 +222,9 @@ function buildRoute(depot: Depot, driver: Driver, routeStops: Stop[], avgSpeedKm
 
 /**
  * Aggregate metrics over a set of routes. Time-window violations are derived
- * from the displayed `etaByStopId` strings (arrival strictly after
- * `timeWindow.end`), so this can be recomputed by anyone holding routes + stops.
+ * from the `etaByStopId` strings (arrival strictly after `timeWindow.end`), so
+ * this can be recomputed by anyone holding routes + stops. Because ETAs do not
+ * wrap at midnight ("25:13"), a next-day arrival correctly counts as late.
  */
 export function computeMetrics(routes: Route[], stops: Stop[]): RouteMetrics {
   const stopsById = new Map<string, Stop>();

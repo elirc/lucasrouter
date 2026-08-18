@@ -174,7 +174,7 @@ export function arrowIcon(bearing: number, color: string): DivIcon {
 }
 
 // ---------------------------------------------------------------------------
-// "You are here" (driver focus mode)
+// Leg-start dot (driver focus mode: previous stop or depot)
 // ---------------------------------------------------------------------------
 
 const HERE_SIZE = 40;

@@ -17,15 +17,18 @@
 // All reported km are ESTIMATED ROAD km (haversine x ROAD_FACTOR); drive time is
 // road km / avgSpeedKmh * 60. See distance.ts.
 //
-// The whole thing is pure, deterministic and runs in a few tens of milliseconds
-// for 45 stops / 3 drivers (the idle-repair pass is the expensive part).
+// The whole thing is pure and runs in a few tens of milliseconds for 45 stops /
+// 3 drivers (the idle-repair pass is the expensive part). It is deterministic
+// for any input whose repair stage finishes within its time budget (see
+// `REPAIR_TIME_BUDGET_MS`); only pathological requests near the API caps hit
+// the budget and then get a less-repaired (but still valid) plan.
 
 import type { OptimizeRequest, OptimizeResponse } from '@/lib/types';
 import { parseHHMM } from '@/lib/time';
 import { assignStops } from './assign';
 import { baseline, BASELINE_ALGORITHM, roundMs } from './baseline';
 import { buildDistanceMatrix } from './distance';
-import { repairTimeWindows } from './repair';
+import { REPAIR_TIME_BUDGET_MS, repairTimeWindows } from './repair';
 import { schedule } from './schedule';
 import { sequenceRoute } from './sequence';
 import { resolveOptions } from './types';
@@ -68,7 +71,10 @@ export function optimize(req: OptimizeRequest): OptimizeResponse {
   // 2. Which driver gets which stops.
   const { assignments, unassignedStopIds } = assignStops(depot, drivers, stops, opts);
 
-  // 3 + 4. Order each driver's stops, then repair time-window violations.
+  // 3 + 4. Order each driver's stops, then repair time-window violations. The
+  // repair passes share one wall-clock budget for the whole request so a
+  // pathological (but schema-valid) input cannot run for minutes.
+  const repairDeadline = performance.now() + REPAIR_TIME_BUDGET_MS;
   const ordered: Record<string, string[]> = {};
   for (const driver of drivers) {
     const indices = (assignments[driver.id] ?? [])
@@ -85,7 +91,7 @@ export function optimize(req: OptimizeRequest): OptimizeResponse {
         shiftStartMin: parseHHMM(driver.shiftStart),
         avgSpeedKmh: opts.avgSpeedKmh,
       };
-      order = repairTimeWindows(order, ctx).order;
+      order = repairTimeWindows(order, ctx, undefined, repairDeadline).order;
     }
 
     ordered[driver.id] = order.map((i) => stops[i - 1].id);

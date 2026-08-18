@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getSeed } from '@/data';
-import type { Route, Stop } from '@/lib/types';
+import type { DeliveryEvent, Route, Stop } from '@/lib/types';
 
 // The store module touches `window` / `localStorage` at import time (persist
 // hydrates synchronously), so each test builds a fake `window`, installs it on
@@ -256,6 +256,37 @@ describe('persistence: write dedupe and cross-tab sync', () => {
     expect(stored.state.stops.find((x) => x.id === 'S002')?.status).toBe('delivered');
   });
 
+  it("does not echo a blob written by a different build (missing / extra keys) - no ping-pong", async () => {
+    const storage = new FakeStorage();
+    storage.writeFromOtherTab(KEY, blobV1());
+    const win = makeWindow(storage);
+    const { useAppStore } = await loadStore(win);
+    const writesBefore = storage.writes;
+    // Older build: no `editedSinceOptimize`; newer build: an unknown key.
+    const foreign = JSON.stringify({
+      state: {
+        ...(JSON.parse(blobV1({ activeDriverId: 'D3' })) as { state: Record<string, unknown> }).state,
+        someFutureKey: 42,
+      },
+      version: 1,
+    });
+    storage.writeFromOtherTab(KEY, foreign);
+    win.fireStorage({ key: KEY, newValue: foreign });
+    expect(useAppStore.getState().activeDriverId).toBe('D3');
+    // Applied without writing anything back - the other tab would otherwise
+    // receive our (differently-shaped) blob, apply it, write again, and so on.
+    expect(storage.writes).toBe(writesBefore);
+    // Local ephemeral update afterwards still does not write (slice unchanged).
+    useAppStore.getState().showToast('hi');
+    expect(storage.writes).toBe(writesBefore);
+    // ...but a real local change does, and it carries our own shape.
+    useAppStore.getState().toggleDriverVisibility('D1');
+    expect(storage.writes).toBe(writesBefore + 1);
+    const stored = JSON.parse(storage.getItem(KEY)!) as { state: Record<string, unknown> };
+    expect(stored.state.editedSinceOptimize).toBe(false);
+    expect('someFutureKey' in stored.state).toBe(false);
+  });
+
   it('ignores storage events for other keys, removals and garbage', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const storage = new FakeStorage();
@@ -367,6 +398,312 @@ describe('setStopStatus()', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Driver records: proof of delivery, failures, undo, defer, activity log
+// ---------------------------------------------------------------------------
+
+describe('delivery records', () => {
+  /** Store with the seed loaded and an optimized plan (no network). */
+  async function optimizedStore(): Promise<{ store: StoreModule['useAppStore']; storage: FakeStorage }> {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+    const storage = new FakeStorage();
+    const { useAppStore } = await loadStore(makeWindow(storage));
+    await useAppStore.getState().loadSeed();
+    await useAppStore.getState().optimize();
+    return { store: useAppStore, storage };
+  }
+  const stopOf = (store: StoreModule['useAppStore'], id: string) =>
+    store.getState().stops.find((s) => s.id === id)!;
+  const log = (store: StoreModule['useAppStore']) => store.getState().deliveryLog;
+
+  it('recordDelivery() stamps the proof, flips the status and appends one event', async () => {
+    const { store } = await optimizedStore();
+    const d1 = store.getState().routes!.find((r) => r.driverId === 'D1')!;
+    const id = d1.stopIds[0];
+    const result = store.getState().recordDelivery(id, {
+      method: 'door',
+      recipientName: '  Ana Ruiz  ',
+      note: ' behind the planter ',
+      photo: 'data:image/jpeg;base64,AAAA',
+    });
+    expect(result).toEqual({ ok: true, photoDropped: false });
+
+    const stop = stopOf(store, id);
+    expect(stop.status).toBe('delivered');
+    expect(stop.deliveredAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(stop.proof?.method).toBe('door');
+    expect(stop.proof?.recipientName).toBe('Ana Ruiz'); // trimmed
+    expect(stop.proof?.note).toBe('behind the planter');
+    expect(stop.proof?.photo).toBe('data:image/jpeg;base64,AAAA');
+    expect(stop.proof?.at).toBe(stop.deliveredAt);
+
+    expect(log(store)).toHaveLength(1);
+    const [event] = log(store);
+    expect(event).toMatchObject({
+      stopId: id,
+      driverId: 'D1',
+      type: 'delivered',
+      method: 'door',
+      recipientName: 'Ana Ruiz',
+      note: 'behind the planter',
+      hasPhoto: true,
+    });
+    expect(event.id).toBeTruthy();
+    expect(event.at).toBe(stop.deliveredAt);
+
+    // Unknown stop: no record, no event.
+    expect(store.getState().recordDelivery('S999')).toEqual({ ok: false, photoDropped: false });
+    expect(log(store)).toHaveLength(1);
+  });
+
+  it('recordDelivery() omits empty optional fields and defaults to no photo', async () => {
+    const { store } = await optimizedStore();
+    const id = store.getState().routes![0].stopIds[0];
+    store.getState().recordDelivery(id, { method: 'handed', recipientName: '   ', note: '' });
+    const proof = stopOf(store, id).proof!;
+    expect(proof.method).toBe('handed');
+    expect('recipientName' in proof).toBe(false);
+    expect('note' in proof).toBe(false);
+    expect('photo' in proof).toBe(false);
+    expect(log(store)[0].hasPhoto).toBeUndefined();
+  });
+
+  it('drops the photo (but keeps the record) once the photo budget is spent', async () => {
+    const { store, storage } = await optimizedStore();
+    const mod = await import('@/store/useAppStore');
+    const [a, b] = store.getState().routes![0].stopIds;
+    const big = 'x'.repeat(mod.PHOTO_BUDGET_BYTES - 100);
+    expect(store.getState().recordDelivery(a, { method: 'handed', photo: big }).photoDropped).toBe(false);
+    const second = store.getState().recordDelivery(b, { method: 'door', photo: 'x'.repeat(200) });
+    expect(second).toEqual({ ok: true, photoDropped: true });
+    // The delivery still happened; only the picture is missing.
+    expect(stopOf(store, b).status).toBe('delivered');
+    expect(stopOf(store, b).proof?.photo).toBeUndefined();
+    expect(log(store)[1].hasPhoto).toBeUndefined();
+    expect(storage.getItem(KEY)).toContain('"deliveryLog"');
+  });
+
+  it('recordFailure() keeps the reason-in-notes mechanism and adds a note + event', async () => {
+    const { store } = await optimizedStore();
+    const id = store.getState().routes![1].stopIds[0];
+    const before = stopOf(store, id).notes;
+    expect(store.getState().recordFailure(id, 'No one home', '  gate locked ')).toBe(true);
+    const stop = stopOf(store, id);
+    expect(stop.status).toBe('failed');
+    expect(stop.notes?.startsWith('No one home')).toBe(true);
+    if (before) expect(stop.notes).toContain(before);
+    expect(stop.proof?.note).toBe('gate locked');
+    expect(log(store)).toHaveLength(1);
+    expect(log(store)[0]).toMatchObject({ type: 'failed', reason: 'No one home', note: 'gate locked', driverId: 'D2' });
+
+    // Without a note nothing is stamped on the stop, but the event is still logged.
+    const other = store.getState().routes![1].stopIds[1];
+    expect(store.getState().recordFailure(other, 'Damaged')).toBe(true);
+    expect(stopOf(store, other).proof).toBeUndefined();
+    expect(log(store)).toHaveLength(2);
+    expect(log(store)[1].note).toBeUndefined();
+    expect(store.getState().recordFailure('S999', 'Other')).toBe(false);
+  });
+
+  it('undoStop() clears status + proof and appends an undo event', async () => {
+    const { store } = await optimizedStore();
+    const id = store.getState().routes![0].stopIds[0];
+    store.getState().recordDelivery(id, { method: 'handed', note: 'left with Ana' });
+    expect(stopOf(store, id).proof).toBeDefined();
+    expect(store.getState().undoStop(id)).toBe(true);
+    const stop = stopOf(store, id);
+    expect(stop.status).toBe('pending');
+    expect(stop.proof).toBeUndefined();
+    expect(stop.deliveredAt).toBeUndefined();
+    expect(log(store).map((e) => e.type)).toEqual(['delivered', 'undo']);
+    // Already pending: nothing to undo.
+    expect(store.getState().undoStop(id)).toBe(false);
+    expect(store.getState().undoStop('S999')).toBe(false);
+    expect(log(store)).toHaveLength(2);
+  });
+
+  it('deferStop() moves a pending stop to the end of its own route and logs it', async () => {
+    const { store } = await optimizedStore();
+    const d1 = store.getState().routes!.find((r) => r.driverId === 'D1')!;
+    const first = d1.stopIds[0];
+    expect(store.getState().deferStop(first)).toBe(true);
+    const after = store.getState().routes!.find((r) => r.driverId === 'D1')!;
+    expect(after.stopIds).toEqual([...d1.stopIds.slice(1), first]);
+    expect(after.stopIds).toHaveLength(d1.stopIds.length);
+    // ETAs were re-scheduled for the new order.
+    expect(after.etaByStopId[first]).toMatch(/^\d{1,2}:\d{2}$/);
+    expect(after.etaByStopId[first]).not.toBe(d1.etaByStopId[first]);
+    expect(log(store)).toHaveLength(1);
+    expect(log(store)[0]).toMatchObject({ type: 'deferred', stopId: first, driverId: 'D1' });
+
+    // Already last (we just put it there) → no-op, and no event.
+    expect(store.getState().deferStop(first)).toBe(false);
+    // Done stops and unknown stops are never deferred.
+    store.getState().recordDelivery(after.stopIds[0]);
+    expect(store.getState().deferStop(after.stopIds[0])).toBe(false);
+    expect(store.getState().deferStop('S999')).toBe(false);
+    expect(log(store).filter((e) => e.type === 'deferred')).toHaveLength(1);
+  });
+
+  it('deferStop() re-schedules without marking the plan hand-edited', async () => {
+    const { store } = await optimizedStore();
+    expect(store.getState().editedSinceOptimize).toBe(false);
+    const d1 = store.getState().routes!.find((r) => r.driverId === 'D1')!;
+    // A driver skipping their own stop is not a dispatcher editing the plan:
+    // the dispatcher panel must not start claiming "edited by hand".
+    expect(store.getState().deferStop(d1.stopIds[0])).toBe(true);
+    expect(store.getState().editedSinceOptimize).toBe(false);
+    // ETAs were still re-scheduled, exactly as a move does.
+    const after = store.getState().routes!.find((r) => r.driverId === 'D1')!;
+    expect(after.stopIds).toEqual([...d1.stopIds.slice(1), d1.stopIds[0]]);
+    expect(after.etaByStopId[d1.stopIds[0]]).not.toBe(d1.etaByStopId[d1.stopIds[0]]);
+    expect(store.getState().optimizedMetrics).not.toBeNull();
+
+    // A real hand edit still sets the flag, and a later skip does not wipe it.
+    expect(store.getState().moveStop(after.stopIds[0], 'D2')).toBe(true);
+    expect(store.getState().editedSinceOptimize).toBe(true);
+    expect(store.getState().deferStop(store.getState().routes!.find((r) => r.driverId === 'D1')!.stopIds[0])).toBe(
+      true,
+    );
+    expect(store.getState().editedSinceOptimize).toBe(true);
+  });
+
+  it('recordFailure() clears the proof a previous delivery left on the stop', async () => {
+    const { store } = await optimizedStore();
+    const id = store.getState().routes![0].stopIds[0];
+    store.getState().recordDelivery(id, {
+      method: 'handed',
+      recipientName: 'Ana Ruiz',
+      photo: 'data:image/jpeg;base64,AAAA',
+    });
+    expect(stopOf(store, id).proof?.photo).toBeDefined();
+
+    // Mis-tap corrected the other way round: the stop is failed, so it must not
+    // keep showing "Handed to recipient" + a photo of a parcel back in the van
+    // (nor keep those bytes inside the photo budget).
+    expect(store.getState().recordFailure(id, 'Damaged')).toBe(true);
+    expect(stopOf(store, id).status).toBe('failed');
+    expect(stopOf(store, id).proof).toBeUndefined();
+
+    // With a note, the failure stamps its own proof — the note and nothing else.
+    store.getState().recordDelivery(id, { method: 'handed', photo: 'data:image/jpeg;base64,AAAA' });
+    expect(store.getState().recordFailure(id, 'No one home', 'gate locked')).toBe(true);
+    expect(stopOf(store, id).proof).toEqual({ at: expect.any(String) as unknown as string, note: 'gate locked' });
+    // The log still records both deliveries and both failures (history is kept).
+    expect(log(store).map((e) => e.type)).toEqual(['delivered', 'failed', 'delivered', 'failed']);
+  });
+
+  it('deferStop() refuses a stop that is not on any route', async () => {
+    const { useAppStore } = await loadStore(makeWindow(new FakeStorage()));
+    useAppStore.setState({ depot: seed.depot, drivers: seed.drivers, stops: seed.stops });
+    expect(useAppStore.getState().deferStop('S010')).toBe(false);
+    expect(useAppStore.getState().deliveryLog).toEqual([]);
+  });
+
+  it('caps the log at MAX_LOG_EVENTS, dropping the oldest', async () => {
+    const { store } = await optimizedStore();
+    const mod = await import('@/store/useAppStore'); // same instance loadStore() just built
+    const id = store.getState().routes![0].stopIds[0];
+    // Pre-fill just under the cap with synthetic entries, then push real ones.
+    const filler: DeliveryEvent[] = Array.from({ length: mod.MAX_LOG_EVENTS - 1 }, (_, i) => ({
+      id: `old-${i}`,
+      at: '2020-01-01T00:00:00.000Z',
+      driverId: 'D1',
+      stopId: id,
+      type: 'delivered',
+    }));
+    store.setState({ deliveryLog: filler });
+    store.getState().recordDelivery(id, { method: 'handed' });
+    expect(log(store)).toHaveLength(mod.MAX_LOG_EVENTS);
+    expect(log(store)[0].id).toBe('old-0');
+
+    store.getState().undoStop(id);
+    expect(log(store)).toHaveLength(mod.MAX_LOG_EVENTS);
+    expect(log(store)[0].id).toBe('old-1'); // oldest dropped
+    expect(log(store).at(-1)!.type).toBe('undo');
+  });
+
+  it('is persisted, hydrates from an older blob without the key, and resetDemo() clears it', async () => {
+    const storage = new FakeStorage();
+    storage.writeFromOtherTab(KEY, blobV1()); // no deliveryLog key at all
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+    const { useAppStore } = await loadStore(makeWindow(storage));
+    expect(useAppStore.getState().deliveryLog).toEqual([]);
+    await useAppStore.getState().optimize();
+    const id = useAppStore.getState().routes![0].stopIds[0];
+    useAppStore.getState().recordDelivery(id, { method: 'neighbour', recipientName: 'Sam' });
+
+    const stored = JSON.parse(storage.getItem(KEY)!) as { state: { deliveryLog: DeliveryEvent[] } };
+    expect(stored.state.deliveryLog).toHaveLength(1);
+    expect(stored.state.deliveryLog[0]).toMatchObject({ type: 'delivered', method: 'neighbour' });
+
+    await useAppStore.getState().resetDemo();
+    expect(useAppStore.getState().deliveryLog).toEqual([]);
+  });
+
+  it('refuses a persisted log carrying an event type this build cannot render', async () => {
+    const known: DeliveryEvent = {
+      id: 'e1',
+      at: '2024-05-05T09:00:00.000Z',
+      driverId: 'D1',
+      stopId: 'S001',
+      type: 'delivered',
+    };
+    const ok = new FakeStorage();
+    ok.writeFromOtherTab(KEY, blobV1({ deliveryLog: [known] }));
+    const a = await loadStore(makeWindow(ok));
+    expect(a.useAppStore.getState().deliveryLog).toHaveLength(1);
+
+    // One event with an unknown type (a newer build, a hand-edited devtools
+    // entry) used to reach the activity log, where `TYPE_META[type].badge`
+    // threw and took the whole /driver/[id] screen down on load — and "Try
+    // again" re-crashed, because the offending blob is persisted. The guard
+    // now checks `type` against the known set, so the value never gets in.
+    const spoiled = new FakeStorage();
+    spoiled.writeFromOtherTab(KEY, blobV1({ deliveryLog: [known, { ...known, id: 'e2', type: 'rescheduled' }] }));
+    const b = await loadStore(makeWindow(spoiled));
+    expect(b.useAppStore.getState().deliveryLog).toEqual([]);
+
+    // Same via the cross-tab path: keep what this tab has, apply nothing.
+    const storage = new FakeStorage();
+    storage.writeFromOtherTab(KEY, blobV1({ deliveryLog: [known] }));
+    const win = makeWindow(storage);
+    const c = await loadStore(win);
+    const future = blobV1({ deliveryLog: [{ ...known, id: 'e3', type: 'rescheduled' }] });
+    win.fireStorage({ key: KEY, newValue: future });
+    expect(c.useAppStore.getState().deliveryLog).toEqual([known]);
+  });
+
+  it("accepts another tab's log and rejects a malformed one (cross-tab guard)", async () => {
+    const storage = new FakeStorage();
+    storage.writeFromOtherTab(KEY, blobV1());
+    const win = makeWindow(storage);
+    const { useAppStore } = await loadStore(win);
+
+    const good = blobV1({
+      deliveryLog: [
+        { id: 'e1', at: '2024-05-05T09:00:00.000Z', driverId: 'D1', stopId: 'S001', type: 'delivered' },
+      ],
+    });
+    storage.writeFromOtherTab(KEY, good);
+    win.fireStorage({ key: KEY, newValue: good });
+    expect(useAppStore.getState().deliveryLog).toHaveLength(1);
+
+    // Entries missing their identity are not events: keep what we have.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const bad = blobV1({ deliveryLog: [{ nope: 1 }] });
+    storage.writeFromOtherTab(KEY, bad);
+    win.fireStorage({ key: KEY, newValue: bad });
+    expect(useAppStore.getState().deliveryLog).toHaveLength(1);
+    const worse = blobV1({ deliveryLog: 'not-an-array' });
+    win.fireStorage({ key: KEY, newValue: worse });
+    expect(useAppStore.getState().deliveryLog).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled(); // a bad key is dropped silently, not a parse error
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Actions: loading, optimizing, resetting, exporting, progress
 // ---------------------------------------------------------------------------
 
@@ -382,14 +719,15 @@ function stubFetch(impl: (input: RequestInfo | URL, init?: RequestInit) => Promi
 const rejectingFetch = () => stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
 
 describe('loadSeed()', () => {
-  it('falls back to the bundled seed when /api/seed is unreachable', async () => {
+  it('loads the bundled seed synchronously-ish without a network round trip', async () => {
+    // The seed ships in the store chunk; fetching /api/seed would only delay
+    // the first map frame (both map pages gate on `depot`).
     const fetchMock = rejectingFetch();
     const { useAppStore } = await loadStore(makeWindow(new FakeStorage()));
     expect(useAppStore.getState().depot).toBeNull();
     await useAppStore.getState().loadSeed();
     const s = useAppStore.getState();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/seed');
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(s.depot?.id).toBe('DEPOT');
     expect(s.drivers.map((d) => d.id)).toEqual(['D1', 'D2', 'D3']);
     expect(s.stops).toHaveLength(45);
@@ -397,34 +735,20 @@ describe('loadSeed()', () => {
     expect(s.routes).toBeNull();
   });
 
-  it('uses the API payload when it is well-formed', async () => {
-    const payload = { ...seed, drivers: seed.drivers.slice(0, 1), stops: seed.stops.slice(0, 5) };
-    stubFetch(() => Promise.resolve(new Response(JSON.stringify(payload), { status: 200 })));
-    const { useAppStore } = await loadStore(makeWindow(new FakeStorage()));
-    await useAppStore.getState().loadSeed();
-    expect(useAppStore.getState().drivers).toHaveLength(1);
-    expect(useAppStore.getState().stops).toHaveLength(5);
-  });
-
-  it('ignores a malformed API payload and a non-2xx status (local seed instead)', async () => {
-    stubFetch(() => Promise.resolve(new Response(JSON.stringify({ nope: 1 }), { status: 200 })));
+  it('hands out fresh copies (a status change never leaks into the next load)', async () => {
     const a = await loadStore(makeWindow(new FakeStorage()));
     await a.useAppStore.getState().loadSeed();
-    expect(a.useAppStore.getState().stops).toHaveLength(45);
-
-    stubFetch(() => Promise.resolve(new Response('boom', { status: 500 })));
+    a.useAppStore.getState().setStopStatus('S001', 'delivered');
     const b = await loadStore(makeWindow(new FakeStorage()));
     await b.useAppStore.getState().loadSeed();
-    expect(b.useAppStore.getState().stops).toHaveLength(45);
+    expect(b.useAppStore.getState().stops.find((x) => x.id === 'S001')?.status).toBe('pending');
   });
 
-  it('keeps already-loaded (rehydrated) state and does not refetch', async () => {
-    const fetchMock = rejectingFetch();
+  it('keeps already-loaded (rehydrated) state', async () => {
     const storage = new FakeStorage();
     storage.writeFromOtherTab(KEY, blobV1({ stops: withStatus(seed.stops, 'S001', 'delivered') }));
     const { useAppStore } = await loadStore(makeWindow(storage));
     await useAppStore.getState().loadSeed();
-    expect(fetchMock).not.toHaveBeenCalled();
     expect(useAppStore.getState().stops.find((x) => x.id === 'S001')?.status).toBe('delivered');
   });
 });
@@ -437,10 +761,10 @@ describe('optimize()', () => {
     await useAppStore.getState().loadSeed();
     await useAppStore.getState().optimize();
     const s = useAppStore.getState();
-    // One call for the seed, one for the optimize attempt.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(String(fetchMock.mock.calls[1][0])).toBe('/api/optimize');
-    expect(fetchMock.mock.calls[1][1]?.method).toBe('POST');
+    // Exactly one network call: the optimize attempt (the seed is bundled).
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/optimize');
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST');
     expect(warn).toHaveBeenCalled(); // "unreachable; optimizing locally"
     expect(s.isOptimizing).toBe(false);
     expect(s.optimizeError).toBeNull();
@@ -474,7 +798,7 @@ describe('optimize()', () => {
     await useAppStore.getState().loadSeed();
     await useAppStore.getState().optimize();
     const s = useAppStore.getState();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(s.algorithm).toBe('remote-solver-9');
     expect(s.computeMs).toBe(12.5);
     expect(s.routes).toEqual(local.routes);
@@ -503,6 +827,138 @@ describe('optimize()', () => {
     await b.useAppStore.getState().optimize();
     expect(b.useAppStore.getState().algorithm).toBe('nn-2opt-v1');
     expect(b.useAppStore.getState().routes).toHaveLength(3);
+  });
+
+  it('falls back locally when the API returns malformed ETAs or routes (swapped-in algorithm guard)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { optimize } = await import('@/lib/optimizer');
+    const local = optimize({ depot: seed.depot, drivers: seed.drivers, stops: seed.stops });
+    const badEta = {
+      ...local,
+      algorithm: 'remote-x',
+      routes: local.routes.map((r, i) =>
+        i === 0 ? { ...r, etaByStopId: { ...r.etaByStopId, [r.stopIds[0]]: '09:05:00' } } : r,
+      ),
+    };
+    stubFetch((input) =>
+      String(input) === '/api/seed'
+        ? Promise.reject(new TypeError('offline'))
+        : Promise.resolve(new Response(JSON.stringify(badEta), { status: 200 })),
+    );
+    const a = await loadStore(makeWindow(new FakeStorage()));
+    await a.useAppStore.getState().loadSeed();
+    await a.useAppStore.getState().optimize();
+    expect(a.useAppStore.getState().algorithm).toBe('nn-2opt-v1'); // not 'remote-x'
+
+    // Past-midnight ETAs ("25:13") are valid "HH:MM" and pass.
+    const lateEta = {
+      ...local,
+      algorithm: 'remote-y',
+      routes: local.routes.map((r, i) =>
+        i === 0 ? { ...r, etaByStopId: { ...r.etaByStopId, [r.stopIds[0]]: '25:13' } } : r,
+      ),
+    };
+    stubFetch((input) =>
+      String(input) === '/api/seed'
+        ? Promise.reject(new TypeError('offline'))
+        : Promise.resolve(new Response(JSON.stringify(lateEta), { status: 200 })),
+    );
+    const b = await loadStore(makeWindow(new FakeStorage()));
+    await b.useAppStore.getState().loadSeed();
+    await b.useAppStore.getState().optimize();
+    expect(b.useAppStore.getState().algorithm).toBe('remote-y');
+
+    // A route without stopIds / legs arrays is rejected too.
+    const noLegs = { ...local, algorithm: 'remote-z', routes: [{ driverId: 'D1', stopIds: [] }] };
+    stubFetch((input) =>
+      String(input) === '/api/seed'
+        ? Promise.reject(new TypeError('offline'))
+        : Promise.resolve(new Response(JSON.stringify(noLegs), { status: 200 })),
+    );
+    const c = await loadStore(makeWindow(new FakeStorage()));
+    await c.useAppStore.getState().loadSeed();
+    await c.useAppStore.getState().optimize();
+    expect(c.useAppStore.getState().algorithm).toBe('nn-2opt-v1');
+  });
+
+  /**
+   * Load the store with `@/lib/optimizer` mocked to fail the way a hashed chunk
+   * does after a redeploy (or offline): the dynamic `import()` rejects.
+   */
+  async function loadStoreWithoutOptimizerChunk(win: FakeWindow): Promise<StoreModule> {
+    vi.resetModules();
+    vi.doMock('@/lib/optimizer', () => {
+      throw new Error('ChunkLoadError: Loading chunk app/lib_optimizer failed');
+    });
+    (globalThis as { window?: unknown }).window = win;
+    return import('@/store/useAppStore');
+  }
+
+  it('keeps the plan the API returned even when the optimizer chunk cannot load', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { optimize } = await import('@/lib/optimizer');
+    const local = optimize({ depot: seed.depot, drivers: seed.drivers, stops: seed.stops });
+    const remote = { ...local, algorithm: 'remote-solver-9', computeMs: 7 };
+    stubFetch(() => Promise.resolve(new Response(JSON.stringify(remote), { status: 200 })));
+    try {
+      const { useAppStore } = await loadStoreWithoutOptimizerChunk(makeWindow(new FakeStorage()));
+      await useAppStore.getState().loadSeed();
+      await useAppStore.getState().optimize();
+      const s = useAppStore.getState();
+      // The chunk is only needed for the local fallback and the "before"
+      // numbers; losing it must not discard a plan we already have.
+      expect(s.routes).toEqual(remote.routes);
+      expect(s.algorithm).toBe('remote-solver-9');
+      expect(s.optimizeError).toBeNull();
+      expect(s.isOptimizing).toBe(false);
+      expect(s.toast?.tone).toBe('success');
+      expect(s.baselineMetrics).toBeNull(); // no comparison, but a usable plan
+      expect(warn).toHaveBeenCalled(); // "optimizer chunk unavailable"
+    } finally {
+      vi.doUnmock('@/lib/optimizer');
+      vi.resetModules();
+    }
+  });
+
+  it('errors cleanly when neither the API nor the optimizer chunk is available', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    rejectingFetch();
+    try {
+      const { useAppStore } = await loadStoreWithoutOptimizerChunk(makeWindow(new FakeStorage()));
+      await useAppStore.getState().loadSeed();
+      await useAppStore.getState().optimize();
+      const s = useAppStore.getState();
+      expect(s.routes).toBeNull();
+      expect(s.isOptimizing).toBe(false);
+      expect(s.optimizeError).toBe('Optimizer unavailable offline');
+      expect(s.toast).toMatchObject({ message: 'Optimizer unavailable offline', tone: 'error' });
+    } finally {
+      vi.doUnmock('@/lib/optimizer');
+      vi.resetModules();
+    }
+  });
+
+  it('tells the dispatcher and the driver different things about the same plan', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    rejectingFetch();
+    const { useAppStore } = await loadStore(makeWindow(new FakeStorage()));
+    await useAppStore.getState().loadSeed();
+
+    // No argument = unchanged dispatcher behaviour (the demo's headline number).
+    await useAppStore.getState().optimize();
+    expect(useAppStore.getState().toast?.message).toMatch(/^Optimized in \d+ ms · nn-2opt-v1$/);
+
+    // The driver's screen prepares its own plan (#45); "nn-2opt-v1" means
+    // nothing on a phone.
+    await useAppStore.getState().optimize({ toast: 'driver' });
+    expect(useAppStore.getState().toast).toMatchObject({ message: 'Your route is ready', tone: 'success' });
+
+    // Silent: the plan is still there, nothing is announced.
+    useAppStore.getState().dismissToast();
+    await useAppStore.getState().optimize({ toast: 'none' });
+    expect(useAppStore.getState().toast).toBeNull();
+    expect(useAppStore.getState().routes).toHaveLength(3);
+    expect(useAppStore.getState().algorithm).toBe('nn-2opt-v1');
   });
 
   it('refuses to optimize before the seed is loaded (error toast, no fetch)', async () => {
@@ -604,6 +1060,65 @@ describe('moveStop(): index handling and metrics', () => {
   });
 });
 
+describe('moveStop(): done stops and the edited flag', () => {
+  async function optimizedStore(): Promise<StoreModule['useAppStore']> {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    rejectingFetch();
+    const { useAppStore } = await loadStore(makeWindow(new FakeStorage()));
+    await useAppStore.getState().loadSeed();
+    await useAppStore.getState().optimize();
+    return useAppStore;
+  }
+  const routeOf = (store: StoreModule['useAppStore'], driverId: string) =>
+    store.getState().routes!.find((r) => r.driverId === driverId)!;
+
+  it('refuses to move a delivered or failed stop (it stays where it was done)', async () => {
+    const store = await optimizedStore();
+    const d1 = routeOf(store, 'D1');
+    const [done, other] = d1.stopIds;
+    store.getState().setStopStatus(done, 'delivered');
+    expect(store.getState().moveStop(done, 'D2')).toBe(false);
+    expect(store.getState().moveStop(done, 'D1', 3)).toBe(false); // not even reordered
+    expect(routeOf(store, 'D1').stopIds).toEqual(d1.stopIds);
+    store.getState().setStopStatus(other, 'failed');
+    expect(store.getState().moveStop(other, 'D3')).toBe(false);
+    // Back to pending: movable again.
+    store.getState().setStopStatus(other, 'pending');
+    expect(store.getState().moveStop(other, 'D3')).toBe(true);
+    expect(routeOf(store, 'D3').stopIds).toContain(other);
+  });
+
+  it('tracks editedSinceOptimize: set by a real move, cleared by optimize / reset, persisted', async () => {
+    const store = await optimizedStore();
+    expect(store.getState().editedSinceOptimize).toBe(false);
+    const d1 = routeOf(store, 'D1');
+    // A no-op "move" (dropped where it already was) does not count as an edit.
+    expect(store.getState().moveStop(d1.stopIds[0], 'D1', 0)).toBe(false);
+    expect(store.getState().editedSinceOptimize).toBe(false);
+    expect(store.getState().moveStop(d1.stopIds[0], 'D2')).toBe(true);
+    expect(store.getState().editedSinceOptimize).toBe(true);
+    await store.getState().optimize();
+    expect(store.getState().editedSinceOptimize).toBe(false);
+    store.getState().moveStop(routeOf(store, 'D2').stopIds[0], 'D3');
+    expect(store.getState().editedSinceOptimize).toBe(true);
+    await store.getState().resetDemo();
+    expect(store.getState().editedSinceOptimize).toBe(false);
+  });
+
+  it('is persisted, and a blob without the key (older build) still hydrates with the default', async () => {
+    const storage = new FakeStorage();
+    storage.writeFromOtherTab(KEY, blobV1()); // no editedSinceOptimize key at all
+    const { useAppStore } = await loadStore(makeWindow(storage));
+    expect(useAppStore.getState().editedSinceOptimize).toBe(false);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    rejectingFetch();
+    await useAppStore.getState().optimize();
+    useAppStore.getState().moveStop(useAppStore.getState().routes![0].stopIds[0], 'D2');
+    const stored = JSON.parse(storage.getItem(KEY)!) as { state: { editedSinceOptimize: boolean } };
+    expect(stored.state.editedSinceOptimize).toBe(true);
+  });
+});
+
 describe('resetDemo()', () => {
   it('reloads a fresh seed, clears the plan / statuses / legend, keeps the active driver', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -664,7 +1179,7 @@ describe('UI prefs', () => {
 });
 
 describe('exportRoutesJson()', () => {
-  it('produces pretty JSON with { exportedAt, depot, drivers, routes, metrics }', async () => {
+  it('produces a self-contained pretty JSON export (stops, unassigned ids, baseline, provenance)', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     rejectingFetch();
     const { useAppStore } = await loadStore(makeWindow(new FakeStorage()));
@@ -672,9 +1187,24 @@ describe('exportRoutesJson()', () => {
 
     // Before optimizing: routes export as [] and metrics as null.
     const empty = JSON.parse(useAppStore.getState().exportRoutesJson()) as Record<string, unknown>;
-    expect(Object.keys(empty)).toEqual(['exportedAt', 'depot', 'drivers', 'routes', 'metrics']);
+    expect(Object.keys(empty)).toEqual([
+      'exportedAt',
+      'algorithm',
+      'optimizedAt',
+      'depot',
+      'drivers',
+      'stops',
+      'routes',
+      'unassignedStopIds',
+      'metrics',
+      'baselineMetrics',
+    ]);
     expect(empty.routes).toEqual([]);
     expect(empty.metrics).toBeNull();
+    expect(empty.algorithm).toBeNull();
+    // Nothing planned yet: every stop is unassigned, and the stops themselves are included.
+    expect((empty.stops as unknown[]).length).toBe(45);
+    expect((empty.unassignedStopIds as string[]).length).toBe(45);
 
     await useAppStore.getState().optimize();
     const text = useAppStore.getState().exportRoutesJson();
@@ -685,12 +1215,24 @@ describe('exportRoutesJson()', () => {
       drivers: { id: string }[];
       routes: { driverId: string; stopIds: string[] }[];
       metrics: { totalDistanceKm: number };
+      stops: { id: string }[];
+      unassignedStopIds: string[];
+      baselineMetrics: { totalDistanceKm: number };
+      algorithm: string;
+      optimizedAt: string;
     };
     expect(json.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(json.depot.id).toBe('DEPOT');
     expect(json.drivers.map((d) => d.id)).toEqual(['D1', 'D2', 'D3']);
     expect(json.routes.map((r) => r.driverId)).toEqual(['D1', 'D2', 'D3']);
     expect(json.metrics.totalDistanceKm).toBe(useAppStore.getState().optimizedMetrics!.totalDistanceKm);
+    // Self-contained: every routed id resolves to an exported stop; nothing unassigned on the seed.
+    const exported = new Set(json.stops.map((s) => s.id));
+    for (const r of json.routes) for (const id of r.stopIds) expect(exported.has(id)).toBe(true);
+    expect(json.unassignedStopIds).toEqual([]);
+    expect(json.baselineMetrics.totalDistanceKm).toBe(useAppStore.getState().baselineMetrics!.totalDistanceKm);
+    expect(json.algorithm).toBe(useAppStore.getState().algorithm);
+    expect(json.optimizedAt).toBe(useAppStore.getState().lastOptimizedAt);
   });
 });
 
@@ -726,8 +1268,16 @@ describe('selectors', () => {
     });
     // A done stop AFTER a pending one does not move "next" past the pending stop.
     expect(driverProgress(route, byId(['A', 'delivered'], ['B', 'pending'], ['C', 'delivered'], ['D', 'pending'])).nextIndex).toBe(1);
-    // Unknown ids count as pending; all done -> nextIndex -1.
-    expect(driverProgress(route, {}).nextIndex).toBe(0);
+    // Unknown ids (inconsistent data) are skipped - not counted, never "next" -
+    // so the driver screen cannot wedge on a stop it cannot show.
+    expect(driverProgress(route, {})).toEqual({ total: 0, done: 0, delivered: 0, failed: 0, nextIndex: -1 });
+    expect(driverProgress(route, byId(['A', 'delivered'], ['C', 'pending']))).toEqual({
+      total: 2,
+      done: 1,
+      delivered: 1,
+      failed: 0,
+      nextIndex: 2, // C's position in the route
+    });
     expect(driverProgress(route, byId(['A', 'delivered'], ['B', 'delivered'], ['C', 'failed'], ['D', 'delivered']))).toEqual({
       total: 4,
       done: 4,

@@ -2,16 +2,20 @@
 
 import './driver.css';
 
-import { Inbox, Route as RouteIcon, UserX, Wand2 } from 'lucide-react';
+import { Inbox, Loader2, RotateCcw, UserX } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
+import { MapSkeleton } from '@/components/map';
 import { Button, Card, EmptyState, Skeleton, Toast } from '@/components/ui';
+import { downloadText, todayStamp } from '@/lib/download';
 import { shortAddress } from '@/lib/geo';
 import { to12h } from '@/lib/time';
 import type { FailureReason, Stop } from '@/lib/types';
-import { driverProgress, useAppStore, useHasHydrated } from '@/store/useAppStore';
+import { driverProgress, useAppStore, useHasHydrated, type DeliveryProofInput } from '@/store/useAppStore';
 
+import { ActivityLogSheet } from './ActivityLogSheet';
+import { DeliverySheet } from './DeliverySheet';
 import { DriverFrame } from './DriverFrame';
 import { DriverHeader, DriverPlainHeader } from './DriverHeader';
 import { DriverMap } from './DriverMap';
@@ -19,6 +23,7 @@ import { DriverStopList } from './DriverStopList';
 import { FailReasonSheet } from './FailReasonSheet';
 import { NavigateLink } from './NavigateLink';
 import { NextStopCard } from './NextStopCard';
+import { buildEventsJson, buildRouteReportCsv, eventsForDriver, summarizeDay } from './report';
 import { RouteCompleteCard } from './RouteCompleteCard';
 import { StopDetailsSheet } from './StopDetailsSheet';
 
@@ -40,6 +45,10 @@ const BOTTOM_BAR_TOAST_OFFSET = 56;
  * progress, next stop), so a dispatcher moving stops between drivers, or a
  * status change made in another tab, shows up immediately; delivery progress
  * survives refresh via the store's persistence.
+ *
+ * A driver never waits for dispatch: when no plan exists yet the screen
+ * prepares one itself (one `optimize()` call, "Preparing your route…" while it
+ * runs, a retry if it fails) instead of the old "ask dispatch" dead end.
  */
 export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
   const hydrated = useHasHydrated();
@@ -49,12 +58,14 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
   const drivers = useAppStore((s) => s.drivers);
   const stops = useAppStore((s) => s.stops);
   const routes = useAppStore((s) => s.routes);
-  const isOptimizing = useAppStore((s) => s.isOptimizing);
-  const activeDriverId = useAppStore((s) => s.activeDriverId);
+  const deliveryLog = useAppStore((s) => s.deliveryLog);
   const loadSeed = useAppStore((s) => s.loadSeed);
   const optimize = useAppStore((s) => s.optimize);
   const setActiveDriver = useAppStore((s) => s.setActiveDriver);
-  const setStopStatus = useAppStore((s) => s.setStopStatus);
+  const recordDelivery = useAppStore((s) => s.recordDelivery);
+  const recordFailure = useAppStore((s) => s.recordFailure);
+  const undoStop = useAppStore((s) => s.undoStop);
+  const deferStop = useAppStore((s) => s.deferStop);
   const showToast = useAppStore((s) => s.showToast);
 
   // Load data once hydrated (no-op when the persisted state already has it).
@@ -64,10 +75,48 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
 
   const driver = useMemo(() => drivers.find((d) => d.id === driverId), [drivers, driverId]);
 
-  // Remember this driver as the "last used" one on the picker.
+  // Remember this driver as the "last used" one on the picker. Claimed ONCE
+  // per screen (when it mounts / the driver id changes) and read imperatively:
+  // `activeDriverId` is persisted and cross-tab-synced, so an effect that
+  // re-ran on its changes would make two driver tabs (D1 and D2) overwrite
+  // each other forever - each "correcting" the value the other just wrote.
+  const driverExists = !!driver;
   useEffect(() => {
-    if (hydrated && driver && activeDriverId !== driver.id) setActiveDriver(driver.id);
-  }, [hydrated, driver, activeDriverId, setActiveDriver]);
+    if (!hydrated || !driverExists) return;
+    if (useAppStore.getState().activeDriverId !== driverId) setActiveDriver(driverId);
+  }, [hydrated, driverExists, driverId, setActiveDriver]);
+
+  // ---- auto-prepare a plan --------------------------------------------------
+  // Nobody has optimized yet (fresh device, reset demo): rather than telling
+  // the driver to go find dispatch, run the optimizer once for them. The
+  // "is it running" flag is the store's own `isOptimizing` — no extra state to
+  // set synchronously inside the effect (which would cascade renders).
+  const isOptimizing = useAppStore((s) => s.isOptimizing);
+  // Was there a plan the first time this screen could see one? Captured by
+  // adjusting state during render (the React-sanctioned way to derive from an
+  // incoming value, as in `Toast`), NOT in an effect. `false` — arrived with
+  // nothing — is the only case that auto-optimizes: if a plan existed and
+  // later vanished, the dispatcher reset the demo and silently re-optimizing
+  // would undo their reset from under them.
+  const [planAtFirstLook, setPlanAtFirstLook] = useState<boolean | null>(null);
+  if (hydrated && depot && planAtFirstLook === null) setPlanAtFirstLook(routes !== null);
+
+  const attemptedRef = useRef(false);
+  const [prepareOutcome, setPrepareOutcome] = useState<'ok' | 'failed' | null>(null);
+  const prepare = useCallback(async () => {
+    attemptedRef.current = true;
+    // `toast: 'driver'`: the dispatcher's "Optimized in 70 ms · nn-2opt-v1" is
+    // the point of the demo on /dispatch and meaningless on a phone that just
+    // quietly prepared its own route.
+    await optimize({ toast: 'driver' });
+    // Read the outcome imperatively: `routes` in this closure is stale.
+    setPrepareOutcome(useAppStore.getState().routes ? 'ok' : 'failed');
+  }, [optimize]);
+  useEffect(() => {
+    if (routes !== null || planAtFirstLook !== false || !driverExists) return;
+    if (attemptedRef.current) return; // one automatic attempt; the UI offers a retry
+    void prepare();
+  }, [routes, planAtFirstLook, driverExists, prepare]);
 
   const route = useMemo(() => routes?.find((r) => r.driverId === driverId), [routes, driverId]);
   const stopsById = useMemo(() => {
@@ -76,6 +125,9 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
     return byId;
   }, [stops]);
   const progress = useMemo(() => driverProgress(route, stopsById), [route, stopsById]);
+  // Today's records for this driver (newest first) + the day's summary numbers.
+  const events = useMemo(() => eventsForDriver(deliveryLog, driverId, route), [deliveryLog, driverId, route]);
+  const summary = useMemo(() => summarizeDay(events), [events]);
 
   const { total, done, delivered, failed, nextIndex } = progress;
   const nextStopId = route && nextIndex >= 0 ? route.stopIds[nextIndex] : null;
@@ -101,18 +153,21 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
   }, [focus, stopsById]);
 
   // ---- local UI state -------------------------------------------------------
+  const [deliverStopId, setDeliverStopId] = useState<string | null>(null);
   const [failStopId, setFailStopId] = useState<string | null>(null);
   const [detailsStopId, setDetailsStopId] = useState<string | null>(null);
+  const [logOpen, setLogOpen] = useState(false);
+  const deliverStop = deliverStopId ? (stopsById[deliverStopId] ?? null) : null;
   const failStop = failStopId ? (stopsById[failStopId] ?? null) : null;
   const detailsStop = detailsStopId ? stopsById[detailsStopId] : undefined;
 
   // ---- focus management -----------------------------------------------------
-  // The Next Stop card is keyed on the stop id, so Delivered/Failed re-mount
-  // it and the button that was just activated leaves the DOM (focus would fall
-  // to <body>). When the action came from the card's own buttons we move focus
-  // deliberately onto the new card's heading (or the Route complete heading).
-  // Actions from the details sheet are left to the dialog, which returns focus
-  // to the row that opened it.
+  // The Next Stop card is keyed on the stop id, so Delivered/Failed/Skip
+  // re-mount it and the button that was just activated leaves the DOM (focus
+  // would fall to <body>). When the action came from the card's own buttons we
+  // move focus deliberately onto the new card's heading (or the Route complete
+  // heading). Actions from the details sheet are left to the dialog, which
+  // returns focus to the row that opened it.
   const nextHeadingRef = useRef<HTMLHeadingElement>(null);
   const completeHeadingRef = useRef<HTMLHeadingElement>(null);
   const pendingFocusRef = useRef(false);
@@ -125,38 +180,73 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
   }, [nextStopKey, isComplete]);
 
   // ---- actions --------------------------------------------------------------
-  const markDelivered = useCallback(
+  /** Undo from a toast: the restored stop becomes "next", so take focus with it. */
+  const undoFromToast = useCallback(
     (stopId: string) => {
-      const stop = stopsById[stopId];
-      if (!stop) return;
-      setStopStatus(stopId, 'delivered');
-      showToast(`Delivered · ${shortAddress(stop.address)}`, 'success');
-      setDetailsStopId(null);
+      pendingFocusRef.current = true;
+      if (undoStop(stopId)) showToast('Undone · back to pending', 'info');
     },
-    [stopsById, setStopStatus, showToast],
+    [undoStop, showToast],
+  );
+
+  const confirmDelivery = useCallback(
+    (proof: DeliveryProofInput) => {
+      const stopId = deliverStopId;
+      const stop = stopId ? stopsById[stopId] : undefined;
+      setDeliverStopId(null);
+      if (!stopId || !stop) return;
+      const result = recordDelivery(stopId, proof);
+      if (!result.ok) return;
+      showToast(
+        result.photoDropped
+          ? `Delivered · ${shortAddress(stop.address)} (photo not saved — the photo budget for this device is full)`
+          : `Delivered · ${shortAddress(stop.address)}`,
+        result.photoDropped ? 'info' : 'success',
+        { label: 'Undo', onAction: () => undoFromToast(stopId) },
+      );
+    },
+    [deliverStopId, stopsById, recordDelivery, showToast, undoFromToast],
   );
 
   const markFailed = useCallback(
-    (stopId: string, reason: FailureReason) => {
-      if (!stopsById[stopId]) return;
-      setStopStatus(stopId, 'failed', reason);
-      showToast(`Marked failed · ${reason}`, 'info');
+    (stopId: string, reason: FailureReason, note?: string) => {
       setFailStopId(null);
       setDetailsStopId(null);
+      if (!stopsById[stopId]) return;
+      recordFailure(stopId, reason, note);
+      showToast(`Marked failed · ${reason}`, 'info', {
+        label: 'Undo',
+        onAction: () => undoFromToast(stopId),
+      });
     },
-    [stopsById, setStopStatus, showToast],
+    [stopsById, recordFailure, showToast, undoFromToast],
   );
 
   const markPending = useCallback(
     (stopId: string) => {
       const stop = stopsById[stopId];
-      if (!stop) return;
-      setStopStatus(stopId, 'pending');
-      showToast(`Marked pending · ${shortAddress(stop.address)}`, 'info');
       setDetailsStopId(null);
+      if (!stop) return;
+      if (undoStop(stopId)) showToast(`Marked pending · ${shortAddress(stop.address)}`, 'info');
     },
-    [stopsById, setStopStatus, showToast],
+    [stopsById, undoStop, showToast],
   );
+
+  const skipStop = useCallback(
+    (stopId: string) => {
+      const stop = stopsById[stopId];
+      setDetailsStopId(null);
+      if (!stop) return;
+      if (deferStop(stopId)) showToast(`Skipped · ${shortAddress(stop.address)} moved to the end`, 'info');
+      else showToast('This stop is already last on your route', 'info');
+    },
+    [stopsById, deferStop, showToast],
+  );
+
+  const openDeliverySheet = useCallback((stopId: string) => {
+    setDetailsStopId(null);
+    setDeliverStopId(stopId);
+  }, []);
 
   const openFailSheet = useCallback((stopId: string) => {
     setDetailsStopId(null);
@@ -167,9 +257,9 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
   const cardDelivered = useCallback(
     (stopId: string) => {
       pendingFocusRef.current = true;
-      markDelivered(stopId);
+      openDeliverySheet(stopId);
     },
-    [markDelivered],
+    [openDeliverySheet],
   );
   const cardFailed = useCallback(
     (stopId: string) => {
@@ -178,11 +268,44 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
     },
     [openFailSheet],
   );
-  const cancelFailSheet = useCallback(() => {
+  const cardSkipped = useCallback(
+    (stopId: string) => {
+      pendingFocusRef.current = true;
+      skipStop(stopId);
+    },
+    [skipStop],
+  );
+  const cancelSheet = useCallback(() => {
     // Cancelled from the card path: nothing re-mounts, the dialog restores focus.
     pendingFocusRef.current = false;
     setFailStopId(null);
+    setDeliverStopId(null);
   }, []);
+
+  // ---- end-of-day report ----------------------------------------------------
+  const downloadReport = useCallback(
+    (format: 'csv' | 'json') => {
+      if (!route || !driver) return;
+      try {
+        if (format === 'csv') {
+          downloadText(
+            `routeiq-report-${driverId}-${todayStamp()}.csv`,
+            buildRouteReportCsv({ route, stopsById, events }),
+            'text/csv;charset=utf-8',
+          );
+        } else {
+          downloadText(
+            `routeiq-events-${driverId}-${todayStamp()}.json`,
+            buildEventsJson({ driver, route, events }),
+          );
+        }
+        showToast(format === 'csv' ? 'Report downloaded (CSV)' : 'Events downloaded (JSON)', 'success');
+      } catch {
+        showToast('Download failed', 'error');
+      }
+    },
+    [route, driver, driverId, stopsById, events, showToast],
+  );
 
   // ---- render states --------------------------------------------------------
 
@@ -204,26 +327,40 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
   }
 
   if (!routes) {
+    // No plan: we are building one (the common case — first visit), it failed,
+    // or dispatch cleared it while this screen was open (then it is the
+    // driver's call, not an automatic re-plan).
+    const autoPreparing = isOptimizing || (planAtFirstLook === false && prepareOutcome === null);
+    const failed = prepareOutcome === 'failed';
     return (
       <StateScreen title={driver.name} subtitle={driver.vehicle} color={driver.color}>
-        <EmptyState
-          icon={<RouteIcon className="size-6" aria-hidden="true" />}
-          title="Routes not optimized yet — ask dispatch"
-          description="Your route appears here as soon as the dispatcher runs the optimizer."
-          action={
-            <div className="flex flex-col items-center gap-3">
-              <Button
-                size="lg"
-                loading={isOptimizing}
-                icon={<Wand2 className="size-4" />}
-                onClick={() => void optimize()}
-              >
-                {isOptimizing ? 'Optimizing…' : 'Optimize now (demo)'}
-              </Button>
-              <BackToDriversLink />
-            </div>
-          }
-        />
+        {autoPreparing ? (
+          <PreparingRoute />
+        ) : (
+          <EmptyState
+            icon={<RotateCcw className="size-6" aria-hidden="true" />}
+            title={failed ? 'Could not build your route' : 'Your route was cleared'}
+            description={
+              failed
+                ? "Something went wrong while planning today's stops. Try again — it only takes a moment."
+                : 'Dispatch reset the demo. Plan today’s stops again whenever you are ready.'
+            }
+            action={
+              <div className="flex flex-col items-center gap-3">
+                <Button
+                  size="lg"
+                  onClick={() => {
+                    setPrepareOutcome(null);
+                    void prepare();
+                  }}
+                >
+                  {failed ? 'Try again' : 'Prepare my route'}
+                </Button>
+                <BackToDriversLink />
+              </div>
+            }
+          />
+        )}
       </StateScreen>
     );
   }
@@ -243,10 +380,18 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
 
   const nextEta = nextStopId ? route.etaByStopId[nextStopId] : undefined;
   const detailsIndex = detailsStopId ? route.stopIds.indexOf(detailsStopId) : -1;
+  // Skipping only makes sense while something else is still pending.
+  const canSkip = total - done > 1;
 
   return (
     <DriverFrame>
-      <DriverHeader driver={driver} done={done} total={total} />
+      <DriverHeader
+        driver={driver}
+        done={done}
+        total={total}
+        logCount={events.length}
+        onOpenLog={() => setLogOpen(true)}
+      />
 
       <main className="flex flex-1 flex-col gap-3 px-3 py-3">
         {isComplete ? (
@@ -256,6 +401,10 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
             stopsById={stopsById}
             delivered={delivered}
             failed={failed}
+            deferred={summary.deferred}
+            actualMinutes={summary.actualMinutes}
+            onDownloadCsv={() => downloadReport('csv')}
+            onDownloadJson={() => downloadReport('json')}
             headingRef={completeHeadingRef}
           />
         ) : nextStop ? (
@@ -268,6 +417,7 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
             eta={nextEta}
             onDelivered={() => cardDelivered(nextStop.id)}
             onFailed={() => cardFailed(nextStop.id)}
+            onSkip={canSkip ? () => cardSkipped(nextStop.id) : undefined}
             headingRef={nextHeadingRef}
           />
         ) : null}
@@ -323,22 +473,35 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
         )}
       </div>
 
+      <DeliverySheet
+        open={deliverStop !== null}
+        stop={deliverStop}
+        onConfirm={confirmDelivery}
+        onClose={cancelSheet}
+      />
       <FailReasonSheet
         open={failStop !== null}
         stop={failStop}
-        onPick={(reason) => {
-          if (failStopId) markFailed(failStopId, reason);
+        onPick={(reason, note) => {
+          if (failStopId) markFailed(failStopId, reason, note);
         }}
-        onClose={cancelFailSheet}
+        onClose={cancelSheet}
       />
       <StopDetailsSheet
         stop={detailsStop}
         position={detailsIndex >= 0 ? detailsIndex + 1 : undefined}
         eta={detailsStopId ? route.etaByStopId[detailsStopId] : undefined}
         onClose={() => setDetailsStopId(null)}
-        onDelivered={markDelivered}
+        onDelivered={openDeliverySheet}
         onFailed={openFailSheet}
         onUndo={markPending}
+        onSkip={canSkip ? skipStop : undefined}
+      />
+      <ActivityLogSheet
+        open={logOpen}
+        events={events}
+        stopsById={stopsById}
+        onClose={() => setLogOpen(false)}
       />
 
       {/* Rendered here (not in the root layout) and lifted above the bottom bar. */}
@@ -359,6 +522,34 @@ function BackToDriversLink() {
     >
       Back to drivers
     </Link>
+  );
+}
+
+/**
+ * Shown while the screen builds a plan for a driver who arrived before anyone
+ * optimized. A spinner plus the silhouette of the card that is about to
+ * appear — the driver's next action is to wait a moment, not to call dispatch.
+ */
+function PreparingRoute() {
+  return (
+    <div role="status" aria-live="polite" className="flex flex-col items-center gap-4 py-4">
+      <div className="flex items-center gap-2 text-slate-700">
+        <Loader2 className="size-5 animate-spin" aria-hidden="true" />
+        <p className="text-base font-medium">Preparing your route…</p>
+      </div>
+      <p className="max-w-xs text-center text-sm text-slate-600">
+        Planning today&apos;s stops in the best order. This takes a moment.
+      </p>
+      <Card className="w-full space-y-3 p-4" aria-hidden="true">
+        <Skeleton className="h-3 w-28" />
+        <Skeleton className="h-6 w-full" />
+        <Skeleton className="h-4 w-2/3" />
+        <div className="grid grid-cols-2 gap-3 pt-2">
+          <Skeleton className="h-[52px] rounded-xl" />
+          <Skeleton className="h-[52px] rounded-xl" />
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -385,7 +576,7 @@ function StateScreen({
         }
       />
       <main className="flex flex-1 flex-col justify-center px-4 py-8">{children}</main>
-      {/* "Optimize now (demo)" and load errors toast from these states too. */}
+      {/* Preparation failures and load errors toast from these states too. */}
       <Toast />
     </DriverFrame>
   );
@@ -420,7 +611,15 @@ function RouteScreenSkeleton() {
             </div>
             <Skeleton className="h-11 rounded-xl" />
           </Card>
-          <Skeleton className="h-[35dvh] min-h-[220px] rounded-xl" />
+          {/* A real image (the 6 KB map placeholder), not a grey box: it is the
+              only contentful element in this server-rendered skeleton, so it
+              gives the page a First Contentful Paint / LCP candidate before
+              any JavaScript has run (see MapSkeleton). `decorative` because the
+              wrapper above is already the live region announcing "Loading
+              route" — nested ones announce the same wait twice. */}
+          <div className="h-[35dvh] min-h-[220px] overflow-hidden rounded-xl">
+            <MapSkeleton decorative />
+          </div>
           <div className="space-y-2">
             <Skeleton className="h-4 w-20" />
             <Skeleton className="h-14 rounded-xl" />

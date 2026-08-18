@@ -20,10 +20,16 @@ import { StopMarker } from './StopMarker';
 import { DepotMarker } from './DepotMarker';
 import { RoutePolyline, RoutePolylines } from './RoutePolyline';
 import { FitBounds, FocusFit } from './FitBounds';
-import { resolvePoint } from './mapMath';
+import { loadRoadPaths, resolvePoint } from './mapMath';
 
 // Neutralise Leaflet's default icon URLs before any marker is created.
 setupLeaflet();
+
+// The road geometry (~98 KB) is only *drawn* once routes exist, but on the
+// driver screen the focus leg IS the content: fetch it as soon as the map
+// module evaluates so it arrives alongside the first tiles instead of after
+// the first polyline mounts. Cheap no-op when it is already loading/loaded.
+if (typeof window !== 'undefined') void loadRoadPaths();
 
 const OSM_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION =
@@ -288,7 +294,8 @@ function MapViewInner({
           />
         ))}
 
-        {/* "You are here" at the start of the focus leg */}
+        {/* Pulsing dot at the START of the focus leg (previous stop or depot -
+            where the driver is coming from). No geolocation is used anywhere. */}
         {focusActive && focusFrom ? <HereMarker position={focusFrom} /> : null}
       </MapContainer>
     </div>
@@ -304,8 +311,8 @@ const HereMarker = memo(function HereMarker({ position }: { position: LatLngTupl
       interactive={false}
       keyboard={false}
       zIndexOffset={-500}
-      alt="Your current position"
-      title="You are here"
+      alt="Start of this leg"
+      title="Leg start (previous stop or depot)"
     />
   );
 });

@@ -4,13 +4,13 @@
 // arrows at leg midpoints. One `RoutePolyline` per driver route; the
 // `RoutePolylines` list handles visibility filtering and the global arrow cap.
 
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { Marker, Polyline, Tooltip } from 'react-leaflet';
 import type { PathOptions } from 'leaflet';
 import type { Depot, Driver, Route, Stop } from '@/lib/types';
 import type { LatLngTuple } from '@/lib/geo';
 import { arrowIcon } from './icons';
-import { legMidpoint, legPositions, routePositions, sampleEvenly } from './mapMath';
+import { legMidpoint, legPositions, loadRoadPaths, roadPathsReady, routePositions, sampleEvenly } from './mapMath';
 
 /** Legs shorter than this get no direction arrow (too cluttered). */
 const MIN_ARROW_LEG_METERS = 700;
@@ -76,6 +76,29 @@ interface ArrowSpec {
   bearing: number;
 }
 
+const NO_POSITIONS: LatLngTuple[] = [];
+
+/**
+ * `true` once the precomputed road geometry is in memory. Mounting a polyline
+ * is the signal that it is needed, so the chunk is only fetched by users who
+ * actually have a plan on screen — and the first line drawn is already
+ * road-shaped instead of a straight segment that snaps a frame later.
+ */
+function useRoadPaths(): boolean {
+  const [ready, setReady] = useState(roadPathsReady());
+  useEffect(() => {
+    if (ready) return;
+    let active = true;
+    void loadRoadPaths().then(() => {
+      if (active) setReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [ready]);
+  return ready;
+}
+
 function RoutePolylineImpl({
   route,
   driver,
@@ -86,7 +109,10 @@ function RoutePolylineImpl({
   arrowBudget = MAX_ARROWS_TOTAL,
   onlyLeg = null,
 }: RoutePolylineProps) {
+  const roadsReady = useRoadPaths();
+
   const positions = useMemo<LatLngTuple[]>(() => {
+    if (!roadsReady) return NO_POSITIONS; // nothing drawn until the geometry is in
     if (onlyLeg) {
       const leg =
         route.legs.find((l) => l.fromId === onlyLeg.fromId && l.toId === onlyLeg.toId) ??
@@ -95,12 +121,12 @@ function RoutePolylineImpl({
       return legPositions(leg, depot, stopsById);
     }
     return routePositions(route, depot, stopsById);
-  }, [route, depot, stopsById, onlyLeg]);
+  }, [roadsReady, route, depot, stopsById, onlyLeg]);
 
   const styles = useMemo(() => stylesFor(variant, driver.color), [variant, driver.color]);
 
   const arrows = useMemo<ArrowSpec[]>(() => {
-    if (variant !== 'normal' || !showArrows || onlyLeg) return [];
+    if (!roadsReady || variant !== 'normal' || !showArrows || onlyLeg) return [];
     const candidates: ArrowSpec[] = [];
     route.legs.forEach((leg, i) => {
       const mid = legMidpoint(legPositions(leg, depot, stopsById));
@@ -108,7 +134,7 @@ function RoutePolylineImpl({
       candidates.push({ key: `${leg.fromId}-${leg.toId}-${i}`, position: mid.position, bearing: mid.bearing });
     });
     return sampleEvenly(candidates, arrowBudget);
-  }, [route, depot, stopsById, variant, showArrows, arrowBudget, onlyLeg]);
+  }, [roadsReady, route, depot, stopsById, variant, showArrows, arrowBudget, onlyLeg]);
 
   if (positions.length < 2) return null;
 

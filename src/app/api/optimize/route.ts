@@ -9,9 +9,16 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import type { OptimizeRequest } from '@/lib/types';
 import { optimize } from '@/lib/optimizer';
+import { MAX_SPEED_KMH, MIN_SPEED_KMH } from '@/lib/optimizer/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+/**
+ * Serverless time limit (seconds). The optimizer bounds its own repair stage
+ * (see `REPAIR_TIME_BUDGET_MS`), so a max-size request finishes in a few
+ * seconds; this is a backstop, not the budget.
+ */
+export const maxDuration = 30;
 
 // ---------------------------------------------------------------------------
 // Schema (mirrors src/lib/types.ts). Unknown keys are accepted and stripped.
@@ -31,17 +38,39 @@ const hhmm = z
 const latitude = z.number().min(-90).max(90);
 const longitude = z.number().min(-180).max(180);
 
-const timeWindowSchema = z.object({ start: hhmm, end: hhmm });
+const toMinutes = (v: string): number => {
+  const [h, m] = v.split(':').map(Number);
+  return h * 60 + m;
+};
+
+const timeWindowSchema = z
+  .object({ start: hhmm, end: hhmm })
+  .refine((w) => toMinutes(w.end) >= toMinutes(w.start), {
+    message: 'Time window end must not be before its start',
+    path: ['end'],
+  });
+
+/** CSS hex colour: #rgb, #rgba, #rrggbb or #rrggbbaa (what the UI's contrast helper understands). */
+const hexColor = z.string().regex(/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/, 'Expected a hex colour like #2563eb');
 
 /**
  * Request size caps. The placeholder optimizer builds a dense n x n matrix and
  * runs O(n^2)-O(n^3) local search per driver, and the endpoint is public, so a
  * request must not be able to allocate gigabytes or run for minutes. 1000 stops
- * / 50 drivers is far beyond the demo (45 / 3) and any single depot's day.
+ * / 50 drivers is far beyond the demo (45 / 3) and any single depot's day. (The
+ * repair stage additionally has a wall-clock budget, see `REPAIR_TIME_BUDGET_MS`.)
  * (Not exported: Next only allows HTTP-method / segment-config exports here.)
  */
 const MAX_STOPS = 1000;
 const MAX_DRIVERS = 50;
+
+/**
+ * Sanity bounds on numeric fields. Without them a schema-valid request can
+ * produce out-of-contract output (`NaN:NaN` ETAs, `totalMinutes: 1e308`).
+ */
+const MAX_PACKAGES_PER_STOP = 10_000;
+const MAX_CAPACITY = 1_000_000;
+const MAX_SERVICE_MINUTES = 24 * 60;
 
 const stopSchema = z.object({
   // 'DEPOT' is reserved: RouteLeg.fromId / toId use it for the depot endpoints.
@@ -50,10 +79,10 @@ const stopSchema = z.object({
   lat: latitude,
   lng: longitude,
   recipient: z.string(),
-  packages: z.number().int().nonnegative(),
+  packages: z.number().int().nonnegative().max(MAX_PACKAGES_PER_STOP),
   priority: z.enum(['standard', 'priority', 'overnight']),
   timeWindow: timeWindowSchema.optional(),
-  serviceMinutes: z.number().nonnegative(),
+  serviceMinutes: z.number().nonnegative().max(MAX_SERVICE_MINUTES),
   status: z.enum(['pending', 'delivered', 'failed']),
   notes: z.string().optional(),
   deliveredAt: z.string().optional(),
@@ -63,9 +92,9 @@ const driverSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
   vehicle: z.string(),
-  color: z.string(),
+  color: hexColor,
   shiftStart: hhmm,
-  capacityPackages: z.number().nonnegative(),
+  capacityPackages: z.number().nonnegative().max(MAX_CAPACITY),
 });
 
 const depotSchema = z.object({
@@ -79,7 +108,7 @@ const depotSchema = z.object({
 const optionsSchema = z.object({
   respectTimeWindows: z.boolean().optional(),
   balanceLoad: z.boolean().optional(),
-  avgSpeedKmh: z.number().positive().optional(),
+  avgSpeedKmh: z.number().min(MIN_SPEED_KMH).max(MAX_SPEED_KMH).optional(),
 });
 
 /** Ids that occur more than once, in first-seen order (for error messages). */

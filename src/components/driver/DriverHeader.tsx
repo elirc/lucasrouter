@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, ClipboardList } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -11,13 +11,18 @@ export interface DriverHeaderProps {
   /** Stops delivered or failed. */
   done: number;
   total: number;
+  /** Opens the activity log. The button is hidden when absent. */
+  onOpenLog?: () => void;
+  /** Number of entries in today's log (announced, not drawn as a badge). */
+  logCount?: number;
 }
 
 /**
  * Sticky top header of the driver route screen: back link, driver identity,
- * live "7 of 15 stops" counter and a 3px progress bar in the driver's colour.
+ * live "7 of 15 stops" counter, one-tap access to the activity log and a 3px
+ * progress bar in the driver's colour.
  */
-export function DriverHeader({ driver, done, total }: DriverHeaderProps) {
+export function DriverHeader({ driver, done, total, onOpenLog, logCount = 0 }: DriverHeaderProps) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-white pt-safe">
@@ -47,6 +52,18 @@ export function DriverHeader({ driver, done, total }: DriverHeaderProps) {
         >
           {done} of {total} {total === 1 ? 'stop' : 'stops'}
         </p>
+        {onOpenLog && (
+          // One tap from anywhere on the route screen; the count rides in the
+          // accessible name instead of a badge (nothing to crowd 375 px with).
+          <button
+            type="button"
+            onClick={onOpenLog}
+            aria-label={`Activity log, ${logCount} ${logCount === 1 ? 'entry' : 'entries'} today`}
+            className="-mr-2 flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
+          >
+            <ClipboardList className="size-5" aria-hidden="true" />
+          </button>
+        )}
       </div>
       <div
         role="progressbar"

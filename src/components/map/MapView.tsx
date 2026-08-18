@@ -5,8 +5,11 @@
 // `ssr: false`; a pulsing skeleton fills the container meanwhile.
 
 import dynamic from 'next/dynamic';
+import { preconnect, prefetchDNS } from 'react-dom';
 import type { ControlPosition } from 'leaflet';
 import type { Depot, Driver, Route, Stop } from '@/lib/types';
+
+const OSM_TILE_ORIGIN = 'https://tile.openstreetmap.org';
 
 /** Props for the RouteIQ map (contract shared with the dispatcher + driver pages). */
 /**
@@ -78,15 +81,21 @@ export interface MapViewProps {
  * Largest Contentful Paint lands at first paint instead of at the first map
  * tile, which can only appear after Leaflet has booted.
  */
-export function MapSkeleton() {
+export function MapSkeleton({ decorative = false }: { decorative?: boolean } = {}) {
+  // OSM tiles are the map's LCP image, so open the connection while Leaflet is
+  // still downloading. React hoists both hints into <head> of the server HTML,
+  // which keeps them on map pages only (the landing page never renders this).
+  preconnect(OSM_TILE_ORIGIN, { crossOrigin: 'anonymous' });
+  prefetchDNS(OSM_TILE_ORIGIN);
+
+  // `decorative`: the caller already wraps this in its own live "loading"
+  // region (the driver screen skeleton) — a nested role=status would make
+  // screen readers announce the same thing twice.
+  const a11y = decorative
+    ? { 'aria-hidden': true as const }
+    : { role: 'status', 'aria-busy': true as const, 'aria-live': 'polite' as const, 'aria-label': 'Loading map' };
   return (
-    <div
-      className="relative h-full w-full overflow-hidden bg-slate-200"
-      role="status"
-      aria-busy="true"
-      aria-live="polite"
-      aria-label="Loading map"
-    >
+    <div className="relative h-full w-full overflow-hidden bg-slate-200" {...a11y}>
       {/* Plain <img> on purpose: a 6 KB static asset with an intrinsic size that
           must be in the SSR HTML with fetchpriority=high + sync decode; next/image
           would add its loader/lazy-loading machinery for no benefit here. */}
@@ -113,8 +122,8 @@ export function MapSkeleton() {
  * loaded in the browser.
  */
 // Kick off the Leaflet chunk download as soon as a page that uses the map
-// evaluates (i.e. in parallel with hydration and the /api/seed fetch) instead
-// of waiting until the first <MapView /> render. `dynamic()` below resolves the
+// evaluates (i.e. in parallel with hydration) instead of waiting until the
+// first <MapView /> render. `dynamic()` below resolves the
 // same module from cache. Client-only guard: this module is also evaluated on
 // the server for the SSR pass of pages that import it.
 if (typeof window !== 'undefined') {

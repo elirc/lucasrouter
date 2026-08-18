@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangle, Check, RotateCcw, X } from 'lucide-react';
+import { AlertTriangle, Check, MoveDown, RotateCcw, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { Button, PriorityBadge, StatusPill } from '@/components/ui';
@@ -11,6 +11,7 @@ import { DriverDialog } from './DriverDialog';
 import { isEtaLate } from './NextStopCard';
 import { NavigateLink } from './NavigateLink';
 import { splitFailureNotes } from './notes';
+import { methodLabel } from './report';
 
 export interface StopDetailsSheetProps {
   /** Null/undefined closes the sheet. */
@@ -19,10 +20,13 @@ export interface StopDetailsSheetProps {
   position?: number;
   eta?: string;
   onClose: () => void;
+  /** Opens the proof-of-delivery sheet for this stop. */
   onDelivered: (stopId: string) => void;
   /** Opens the fail-reason picker for this stop. */
   onFailed: (stopId: string) => void;
   onUndo: (stopId: string) => void;
+  /** Move a still-pending stop to the end of the route. */
+  onSkip?: (stopId: string) => void;
 }
 
 /** "9:41 AM" from an ISO timestamp (local time). */
@@ -43,8 +47,9 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 /**
  * Full details for any stop in the list, with status-appropriate actions:
- * pending → Delivered / Failed; delivered or failed → Undo (mark pending).
- * A Navigate link is always available.
+ * pending → Delivered / Failed / Skip for now; delivered or failed → Undo
+ * (mark pending). Delivered stops also show their proof (method, who took it,
+ * note, photo). A Navigate link is always available.
  */
 export function StopDetailsSheet({
   stop,
@@ -54,6 +59,7 @@ export function StopDetailsSheet({
   onDelivered,
   onFailed,
   onUndo,
+  onSkip,
 }: StopDetailsSheetProps) {
   const open = !!stop;
   const late = stop ? isEtaLate(eta, stop.timeWindow) : false;
@@ -109,6 +115,34 @@ export function StopDetailsSheet({
                 </dd>
               </div>
             )}
+            {stop.status === 'delivered' && stop.proof?.method && (
+              <Row label="Method">{methodLabel(stop.proof.method)}</Row>
+            )}
+            {stop.status === 'delivered' && stop.proof?.recipientName && (
+              <Row label="Received by">{stop.proof.recipientName}</Row>
+            )}
+            {stop.proof?.note && (
+              <div className="py-2.5">
+                <dt className="text-sm text-slate-500">
+                  {stop.status === 'failed' ? 'Attempt note' : 'Delivery note'}
+                </dt>
+                <dd className="mt-0.5 text-sm text-slate-900">{stop.proof.note}</dd>
+              </div>
+            )}
+            {stop.proof?.photo && (
+              <div className="py-2.5">
+                <dt className="text-sm text-slate-500">Photo</dt>
+                <dd className="mt-1">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- data URL
+                      captured on this device; there is no origin to optimize. */}
+                  <img
+                    src={stop.proof.photo}
+                    alt={`Proof of delivery for ${stop.address}`}
+                    className="max-h-40 w-auto rounded-lg border border-slate-200"
+                  />
+                </dd>
+              </div>
+            )}
             {note && (
               <div className="py-2.5">
                 <dt className="text-sm text-slate-500">Notes</dt>
@@ -119,26 +153,39 @@ export function StopDetailsSheet({
 
           <div className="mt-3 flex flex-col gap-3">
             {stop.status === 'pending' ? (
-              <div className="grid grid-cols-2 gap-3">
-                <Button
-                  size="lg"
-                  variant="primary"
-                  data-autofocus="true"
-                  icon={<Check className="size-5" strokeWidth={2.5} />}
-                  onClick={() => onDelivered(stop.id)}
-                >
-                  Delivered
-                </Button>
-                <Button
-                  size="lg"
-                  variant="secondary"
-                  style={{ borderColor: '#fca5a5', color: '#b91c1c' }}
-                  icon={<X className="size-5" strokeWidth={2.5} />}
-                  onClick={() => onFailed(stop.id)}
-                >
-                  Failed
-                </Button>
-              </div>
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    size="lg"
+                    variant="primary"
+                    data-autofocus="true"
+                    icon={<Check className="size-5" strokeWidth={2.5} />}
+                    onClick={() => onDelivered(stop.id)}
+                  >
+                    Delivered
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="secondary"
+                    style={{ borderColor: '#fca5a5', color: '#b91c1c' }}
+                    icon={<X className="size-5" strokeWidth={2.5} />}
+                    onClick={() => onFailed(stop.id)}
+                  >
+                    Failed
+                  </Button>
+                </div>
+                {onSkip && (
+                  <Button
+                    variant="ghost"
+                    fullWidth
+                    className="text-slate-600"
+                    icon={<MoveDown className="size-4" />}
+                    onClick={() => onSkip(stop.id)}
+                  >
+                    Skip for now
+                  </Button>
+                )}
+              </>
             ) : (
               <Button
                 size="lg"

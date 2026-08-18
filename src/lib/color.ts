@@ -1,12 +1,16 @@
 // Tiny colour helpers (no dependencies). Used to pick a readable foreground
 // for text placed on a driver's route colour (markers, chips, sequence circles).
 
-/** Parse "#rgb" / "#rrggbb" into [r, g, b] (0–255). Returns null when malformed. */
+/**
+ * Parse "#rgb" / "#rgba" / "#rrggbb" / "#rrggbbaa" into [r, g, b] (0–255); an
+ * alpha channel is ignored. Returns null when malformed.
+ */
 export function hexToRgb(hex: string): [number, number, number] | null {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  const m = /^#?([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(hex.trim());
   if (!m) return null;
   let h = m[1];
-  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  if (h.length <= 4) h = h.split('').map((c) => c + c).join('');
+  h = h.slice(0, 6); // drop alpha
   const n = parseInt(h, 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }

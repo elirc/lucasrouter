@@ -16,7 +16,7 @@ import {
   schedule,
 } from '@/lib/optimizer';
 import { assignStops } from '@/lib/optimizer/assign';
-import { repairTimeWindows } from '@/lib/optimizer/repair';
+import { MAX_LATE_PASS_STOPS, repairTimeWindows } from '@/lib/optimizer/repair';
 import { simulateEtas } from '@/lib/optimizer/schedule';
 import {
   nearestNeighborOrder,
@@ -458,6 +458,35 @@ describe('schedule()', () => {
     expect(out.metrics.timeWindowViolations).toBe(1);
   });
 
+  it('keeps ETAs monotonic and counts violations correctly when a route crosses midnight', () => {
+    // A late shift with enough service time to run past 24:00; the last stop has
+    // a morning window, so a wrapped "00:50" would wrongly look on time.
+    const stops = Array.from({ length: 6 }, (_, i) =>
+      makeStop(`N${i}`, TEST_DEPOT.lat + 0.01 * (i + 1), TEST_DEPOT.lng, {
+        serviceMinutes: 30,
+        timeWindow: i === 5 ? { start: '08:00', end: '10:00' } : undefined,
+      }),
+    );
+    const out = schedule({
+      depot: TEST_DEPOT,
+      drivers: [makeDriver('D1', { shiftStart: '22:00' })],
+      stops,
+      assignments: { D1: stops.map((s) => s.id) },
+    });
+    const route = out.routes[0];
+    const etas = route.stopIds.map((id) => parseHHMM(route.etaByStopId[id]));
+    for (let i = 1; i < etas.length; i++) expect(etas[i]).toBeGreaterThanOrEqual(etas[i - 1]);
+    expect(etas[etas.length - 1]).toBeGreaterThan(24 * 60); // past midnight, e.g. "24:5x"
+    expect(route.etaByStopId[stops[5].id]).toMatch(/^2[4-9]:\d{2}$/);
+    // The stop reached after midnight is late for its 08:00-10:00 window today.
+    expect(out.metrics.timeWindowViolations).toBe(1);
+    expect(computeMetrics(out.routes, stops).timeWindowViolations).toBe(1);
+    // ...and metrics agree with the ETA simulation (the repair pass's view).
+    const legMin = route.legs.map((l) => l.driveMinutes);
+    const sim = simulateEtas(parseHHMM('22:00'), stops, legMin);
+    expect(sim.violations).toBe(1);
+  });
+
   it('handles empty stops', () => {
     const out = schedule({
       depot: TEST_DEPOT,
@@ -597,12 +626,57 @@ describe('assignStops()', () => {
     expect(Object.keys(a.assignments).sort()).toEqual(['D1', 'D2', 'D3']);
   });
 
-  it('respects balanceLoad=false by not forcing counts together', () => {
+  it('balanceLoad=true keeps counts within 3; balanceLoad=false leaves the raw clusters alone', () => {
     const balanced = assignStops(seed.depot, seed.drivers, seed.stops, { balanceLoad: true });
     const counts = Object.values(balanced.assignments).map((a) => a.length);
     expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(3);
-    const free = assignStops(seed.depot, seed.drivers, seed.stops, { balanceLoad: false });
+
+    // A lopsided instance: 40 stops in one wedge east of the depot, 5 in the west.
+    // The k-means clusters are wildly uneven; without balancing they must stay so.
+    const lopsided = [
+      ...Array.from({ length: 40 }, (_, i) => makeStop(`E${i}`, TEST_DEPOT.lat + (i % 8) * 0.004, TEST_DEPOT.lng + 0.06 + Math.floor(i / 8) * 0.004)),
+      ...Array.from({ length: 5 }, (_, i) => makeStop(`W${i}`, TEST_DEPOT.lat + i * 0.004, TEST_DEPOT.lng - 0.06)),
+    ];
+    const drivers = [makeDriver('A', { capacityPackages: 100 }), makeDriver('B', { capacityPackages: 100 })];
+    const free = assignStops(TEST_DEPOT, drivers, lopsided, { balanceLoad: false });
+    const freeCounts = Object.values(free.assignments).map((a) => a.length);
     expect(Object.values(free.assignments).flat()).toHaveLength(45);
+    expect(Math.max(...freeCounts) - Math.min(...freeCounts)).toBeGreaterThan(3);
+    const tidy = assignStops(TEST_DEPOT, drivers, lopsided, { balanceLoad: true });
+    const tidyCounts = Object.values(tidy.assignments).map((a) => a.length);
+    expect(Math.max(...tidyCounts) - Math.min(...tidyCounts)).toBeLessThanOrEqual(3);
+  });
+
+  it('capacity drops never evict 0-package stops and re-admit stops that fit after later drops', () => {
+    // One driver with room for 5 packages. Far 0-package stop A, B (5) and C (3)
+    // are all in its cluster: dropping A would free nothing; B or C must go, and
+    // whichever is dropped, the other + A stay (5 + 0 <= 5).
+    const a = makeStop('A', TEST_DEPOT.lat + 0.05, TEST_DEPOT.lng, { packages: 0 });
+    const b = makeStop('B', TEST_DEPOT.lat + 0.01, TEST_DEPOT.lng, { packages: 5 });
+    const c = makeStop('C', TEST_DEPOT.lat + 0.02, TEST_DEPOT.lng, { packages: 3 });
+    const one = assignStops(TEST_DEPOT, [makeDriver('D', { capacityPackages: 5 })], [a, b, c]);
+    expect(one.assignments.D).toContain('A');
+    expect(one.unassignedStopIds).toHaveLength(1);
+    expect(one.assignments.D.length + one.unassignedStopIds.length).toBe(3);
+
+    // A(1), B(5), C(5), D(1) with capacity 6: after B and C are dropped, A + D fit
+    // (2 of 6) - the naive "drop farthest, never retry" heuristic left 4 units idle.
+    const s = [
+      makeStop('A', TEST_DEPOT.lat + 0.04, TEST_DEPOT.lng, { packages: 1 }),
+      makeStop('B', TEST_DEPOT.lat + 0.03, TEST_DEPOT.lng, { packages: 5 }),
+      makeStop('C', TEST_DEPOT.lat + 0.02, TEST_DEPOT.lng, { packages: 5 }),
+      makeStop('D', TEST_DEPOT.lat + 0.01, TEST_DEPOT.lng, { packages: 1 }),
+    ];
+    const res = assignStops(TEST_DEPOT, [makeDriver('D', { capacityPackages: 6 })], s);
+    const load = res.assignments.D.reduce((sum, id) => sum + s.find((x) => x.id === id)!.packages, 0);
+    expect(load).toBeLessThanOrEqual(6);
+    for (const id of res.unassignedStopIds) {
+      // Every unassigned stop really does not fit in the remaining room.
+      expect(load + s.find((x) => x.id === id)!.packages).toBeGreaterThan(6);
+    }
+    // The van leaves full (a 5 + a 1) rather than with 4 units idle.
+    expect(res.assignments.D).toHaveLength(2);
+    expect(load).toBe(6);
   });
 });
 
@@ -676,6 +750,44 @@ describe('repairTimeWindows()', () => {
     const ctx = { matrix, depotIndex: 0, stops, shiftStartMin: 480, avgSpeedKmh: 32 };
     const order = sequenceRoute(matrix, 0, [1, 2, 3, 4, 5, 6]);
     expect(repairTimeWindows(order, ctx)).toEqual({ order, violations: 0 });
+  });
+
+  it('stops repairing when its wall-clock deadline has passed (still a valid order)', () => {
+    const s1 = makeStop('A', TEST_DEPOT.lat + 0.02, TEST_DEPOT.lng, { serviceMinutes: 30 });
+    const s2 = makeStop('B', TEST_DEPOT.lat + 0.04, TEST_DEPOT.lng, { serviceMinutes: 30 });
+    const s3 = makeStop('C', TEST_DEPOT.lat + 0.06, TEST_DEPOT.lng, {
+      serviceMinutes: 5,
+      timeWindow: { start: '08:00', end: '08:30' },
+    });
+    const stops = [s1, s2, s3];
+    const matrix = buildDistanceMatrix([TEST_DEPOT, ...stops]);
+    const ctx = { matrix, depotIndex: 0, stops, shiftStartMin: parseHHMM('08:00'), avgSpeedKmh: 32 };
+    const order = sequenceRoute(matrix, 0, [1, 2, 3]);
+    // Deadline already in the past: nothing may be moved, but the result is well-formed.
+    const expired = repairTimeWindows(order, ctx, undefined, performance.now() - 1);
+    expect(expired.order).toEqual(order);
+    expect(expired.violations).toBe(1);
+    // With time it does the work.
+    expect(repairTimeWindows(order, ctx).violations).toBe(0);
+  });
+
+  it('skips the late pass on routes longer than MAX_LATE_PASS_STOPS but stays bounded on long routes', () => {
+    // A long single route (every third stop has a morning window it will miss).
+    const n = MAX_LATE_PASS_STOPS + 5;
+    const stops = Array.from({ length: n }, (_, i) =>
+      makeStop(`L${i}`, TEST_DEPOT.lat + 0.001 * (i % 40), TEST_DEPOT.lng + 0.001 * Math.floor(i / 40), {
+        serviceMinutes: 3,
+        timeWindow: i % 3 === 0 ? { start: '09:00', end: '11:00' } : undefined,
+      }),
+    );
+    const matrix = buildDistanceMatrix([TEST_DEPOT, ...stops]);
+    const ctx = { matrix, depotIndex: 0, stops, shiftStartMin: 480, avgSpeedKmh: 32 };
+    const order = Array.from({ length: n }, (_, i) => i + 1);
+    const t0 = performance.now();
+    const res = repairTimeWindows(order, ctx);
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(res.order).toEqual(order); // too long for either pass -> untouched
+    expect([...res.order].sort((a, b) => a - b)).toEqual([...order].sort((a, b) => a - b));
   });
 
   it('is deterministic and keeps the stop multiset on every seed route', () => {

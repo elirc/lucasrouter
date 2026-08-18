@@ -54,6 +54,7 @@ export function assignStops(
   // 3. Rebalance: capacity first (hard constraint), then optional count balance.
   const unassigned = new Set<number>();
   enforceCapacity(state, stops, drivers, unassigned);
+  readmitUnassigned(state, stops, drivers, unassigned);
   if (opts.balanceLoad) {
     balanceCounts(state, stops, drivers, unassigned);
   }
@@ -206,16 +207,20 @@ function enforceCapacity(
       }
 
       if (bestStop === -1) {
-        // Nothing fits anywhere: drop the farthest member (deterministic tie -> lower index).
-        let farthest = members[c][0];
+        // Nothing fits anywhere: drop the farthest member that actually carries
+        // packages (deterministic tie -> lower index). A 0-package stop uses no
+        // capacity, so dropping it could never bring the load down.
+        let farthest = -1;
         let farthestD = -1;
         for (const i of members[c]) {
+          if (stops[i].packages <= 0) continue;
           const d = haversineKm(stops[i], state.centroids[c]);
           if (d > farthestD + 1e-12) {
             farthestD = d;
             farthest = i;
           }
         }
+        if (farthest === -1) break; // cannot happen while loads[c] > capacity, but be safe
         removeFrom(members[c], farthest);
         loads[c] -= stops[farthest].packages;
         unassigned.add(farthest);
@@ -289,6 +294,42 @@ function balanceCounts(
       break;
     }
     if (!moved) break; // capacity makes further balancing impossible
+  }
+}
+
+/**
+ * Second chance for stops dropped by `enforceCapacity`: a stop dropped early
+ * from an over-full cluster may fit somewhere once later drops have freed room
+ * (or in another cluster that was never full). Stops are retried in input
+ * order and go to the nearest centroid with capacity, so the invariant "only
+ * stops that fit nowhere stay unassigned" holds after this pass.
+ */
+function readmitUnassigned(
+  state: ClusterState,
+  stops: Stop[],
+  drivers: Driver[],
+  unassigned: Set<number>,
+): void {
+  if (unassigned.size === 0) return;
+  const k = drivers.length;
+  const members = membersOf(state, stops.length, unassigned);
+  const loads = loadsOf(members, stops);
+  for (const i of [...unassigned].sort((a, b) => a - b)) {
+    let best = -1;
+    let bestD = Infinity;
+    for (let t = 0; t < k; t++) {
+      if (loads[t] + stops[i].packages > drivers[t].capacityPackages) continue;
+      const d = haversineKm(stops[i], state.centroids[t]);
+      if (d < bestD - 1e-12) {
+        bestD = d;
+        best = t;
+      }
+    }
+    if (best === -1) continue; // still fits nowhere
+    unassigned.delete(i);
+    state.clusterOf[i] = best;
+    loads[best] += stops[i].packages;
+    members[best].push(i);
   }
 }
 

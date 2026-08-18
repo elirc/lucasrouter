@@ -76,10 +76,14 @@ export const DEFAULT_OPTIONS: ResolvedOptions = Object.freeze({
   avgSpeedKmh: 32,
 });
 
+/** Sane range for `avgSpeedKmh` (a walking courier ... a motorway). Mirrored by the API schema. */
+export const MIN_SPEED_KMH = 1;
+export const MAX_SPEED_KMH = 200;
+
 /**
- * Fill in defaults for a possibly-undefined / partial options object. Invalid
- * speeds (non-finite or <= 0) fall back to the default rather than producing
- * NaN/Infinity ETAs.
+ * Fill in defaults for a possibly-undefined / partial options object. Speeds
+ * outside [MIN_SPEED_KMH, MAX_SPEED_KMH] (or non-finite) fall back to the
+ * default rather than producing NaN / astronomically long ETAs.
  */
 export function resolveOptions(options?: OptimizeOptions): ResolvedOptions {
   const speed = options?.avgSpeedKmh;
@@ -87,7 +91,7 @@ export function resolveOptions(options?: OptimizeOptions): ResolvedOptions {
     respectTimeWindows: options?.respectTimeWindows ?? DEFAULT_OPTIONS.respectTimeWindows,
     balanceLoad: options?.balanceLoad ?? DEFAULT_OPTIONS.balanceLoad,
     avgSpeedKmh:
-      typeof speed === 'number' && Number.isFinite(speed) && speed > 0
+      typeof speed === 'number' && Number.isFinite(speed) && speed >= MIN_SPEED_KMH && speed <= MAX_SPEED_KMH
         ? speed
         : DEFAULT_OPTIONS.avgSpeedKmh,
   };

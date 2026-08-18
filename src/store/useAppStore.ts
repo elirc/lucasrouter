@@ -30,6 +30,12 @@
  * write dedupe above, /dispatch and /driver tabs stay consistent: a driver's
  * "Delivered" shows up in the open dispatcher tab, and a dispatcher's move shows
  * up on the open driver tab, instead of the two clobbering each other.
+ * (Known limit: the whole slice is applied last-writer-wins, so two tabs that
+ * both write within the same few milliseconds - before either has received the
+ * other's `storage` event - keep the later blob and lose the earlier edit. A
+ * demo-sized trade-off; field-level merging is not worth its complexity here.)
+ * Values that only describe THIS tab must not be re-derived from a synced
+ * value in an effect (see `DriverRouteScreen`), or two tabs ping-pong forever.
  *
  * Storage is only touched in the browser (`typeof window !== 'undefined'`);
  * on the server every storage call is a no-op / null so importing this module
@@ -63,10 +69,13 @@ import { create } from 'zustand';
 import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware';
 
 import { getSeed } from '@/data';
-import { baseline, optimize as optimizeLocal, schedule } from '@/lib/optimizer';
+import { schedule } from '@/lib/optimizer/schedule';
 import type {
+  DeliveryEvent,
+  DeliveryProof,
   Depot,
   Driver,
+  FailureReason,
   OptimizeRequest,
   OptimizeResponse,
   Route,
@@ -81,10 +90,43 @@ import type {
 
 export type ToastTone = 'success' | 'error' | 'info';
 
+/**
+ * Optional single action rendered inside the toast (e.g. "Undo" after a
+ * delivery). Not persisted — like the toast itself it only lives in memory.
+ */
+export interface ToastAction {
+  label: string;
+  onAction: () => void;
+}
+
 export interface ToastState {
   id: number;
   message: string;
   tone?: ToastTone;
+  action?: ToastAction;
+}
+
+/**
+ * Which success toast `optimize()` shows. The dispatcher wants the numbers
+ * ("Optimized in 70 ms · nn-2opt-v1" — the point of the demo); the driver whose
+ * screen silently prepared its own plan (#45) wants to hear that their route is
+ * ready, not the name of an algorithm. `'none'` stays quiet (failures still
+ * toast — the driver screen shows a "Try again" state behind it).
+ */
+export type OptimizeToast = 'dispatch' | 'driver' | 'none';
+
+export interface OptimizeActionOptions {
+  toast?: OptimizeToast;
+}
+
+/** What the driver app passes to `recordDelivery` (the store stamps `at`). */
+export type DeliveryProofInput = Omit<DeliveryProof, 'at'>;
+
+/** Outcome of `recordDelivery`, so the UI can explain a dropped photo. */
+export interface RecordDeliveryResult {
+  ok: boolean;
+  /** True when the photo was discarded to stay inside the storage budget. */
+  photoDropped: boolean;
 }
 
 export interface AppState {
@@ -99,38 +141,56 @@ export interface AppState {
   isOptimizing: boolean;
   optimizeError: string | null;
   lastOptimizedAt: string | null; // ISO
+  /** True once the plan was changed by hand (move / drag) after the last optimisation. */
+  editedSinceOptimize: boolean;
   activeDriverId: string | null; // last chosen driver on /driver
   hiddenDriverIds: string[]; // legend toggles on the dispatcher map
+  /** Append-only driver activity log (oldest dropped past `MAX_LOG_EVENTS`). */
+  deliveryLog: DeliveryEvent[];
   selectedStopId: string | null; // NOT persisted
   hasHydrated: boolean; // NOT persisted; set true once persist finished (or failed) rehydrating
   toast: ToastState | null; // NOT persisted
 
   // actions
   loadSeed(): Promise<void>;
-  optimize(): Promise<void>;
+  /** Plan today's routes. `optimize()` with no argument keeps the dispatcher toast. */
+  optimize(options?: OptimizeActionOptions): Promise<void>;
   resetDemo(): Promise<void>;
   /**
    * Manual reassignment (drag-and-drop, "Move to…", map popup). Works before
    * any optimisation too (bootstraps an empty plan). Returns `true` when the
-   * plan actually changed, `false` for a no-op or an unknown stop / driver —
+   * plan actually changed, `false` for a no-op, an unknown stop / driver, or a
+   * stop that is already delivered / failed (a done stop stays where it was
+   * done; moving it would credit another driver and pad their ETAs) —
    * callers should only toast on `true`.
    */
   moveStop(stopId: string, toDriverId: string, index?: number): boolean;
   setStopStatus(stopId: string, status: StopStatus, notes?: string): void;
+  /**
+   * Driver marks a stop delivered WITH proof: stamps `stop.proof`, flips the
+   * status and appends a `delivered` event. The photo is dropped (and reported
+   * back) when it would push the persisted blob past `PHOTO_BUDGET_BYTES`.
+   */
+  recordDelivery(stopId: string, proof?: DeliveryProofInput): RecordDeliveryResult;
+  /** Driver marks a stop failed: reason into the notes (as before) + a log event. */
+  recordFailure(stopId: string, reason: FailureReason, note?: string): boolean;
+  /** Undo a delivered / failed stop: back to pending, proof cleared, `undo` event. */
+  undoStop(stopId: string): boolean;
+  /**
+   * "Skip for now": move a still-pending stop to the END of the same driver's
+   * route (re-schedules ETAs) and log a `deferred` event. Returns false when
+   * the stop is unknown, already done, unrouted, or already last. Unlike
+   * `moveStop` it does NOT set `editedSinceOptimize` — no dispatcher edited
+   * anything.
+   */
+  deferStop(stopId: string): boolean;
   setActiveDriver(id: string | null): void;
   toggleDriverVisibility(driverId: string): void;
   setSelectedStop(id: string | null): void;
-  showToast(message: string, tone?: ToastTone): void;
+  showToast(message: string, tone?: ToastTone, action?: ToastAction): void;
   dismissToast(): void;
   setHasHydrated(v: boolean): void;
   exportRoutesJson(): string;
-}
-
-/** Shape of `GET /api/seed` (and of the local `getSeed()` fallback). */
-interface SeedPayload {
-  depot: Depot;
-  drivers: Driver[];
-  stops: Stop[];
 }
 
 // ---------------------------------------------------------------------------
@@ -158,8 +218,10 @@ const PERSISTED_KEYS = [
   'algorithm',
   'computeMs',
   'lastOptimizedAt',
+  'editedSinceOptimize',
   'activeDriverId',
   'hiddenDriverIds',
+  'deliveryLog',
 ] as const;
 
 type PersistedKey = (typeof PERSISTED_KEYS)[number];
@@ -178,8 +240,10 @@ const INITIAL_PERSISTED: PersistedSlice = {
   algorithm: null,
   computeMs: null,
   lastOptimizedAt: null,
+  editedSinceOptimize: false,
   activeDriverId: null,
   hiddenDriverIds: [],
+  deliveryLog: [],
 };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -194,6 +258,14 @@ const isNullOr =
 const hasId = (v: unknown): v is { id: string } => isRecord(v) && typeof v.id === 'string';
 const isPoint = (v: unknown): v is { lat: number; lng: number } =>
   isRecord(v) && typeof v.lat === 'number' && typeof v.lng === 'number';
+
+/** Every `DeliveryEvent['type']` this build knows how to render (see the log guard). */
+const DELIVERY_EVENT_TYPES = new Set<string>([
+  'delivered',
+  'failed',
+  'undo',
+  'deferred',
+] satisfies DeliveryEvent['type'][]);
 
 /**
  * Per-key structural guards for the persisted slice. Deliberately shallow: we
@@ -218,9 +290,44 @@ const PERSISTED_GUARDS: { [K in PersistedKey]: (v: unknown) => v is PersistedSli
   algorithm: isNullOr((v): v is string => typeof v === 'string'),
   computeMs: isNullOr((v): v is number => typeof v === 'number'),
   lastOptimizedAt: isNullOr((v): v is string => typeof v === 'string'),
+  editedSinceOptimize: (v): v is boolean => typeof v === 'boolean',
   activeDriverId: isNullOr((v): v is string => typeof v === 'string'),
   hiddenDriverIds: isStringArray,
+  // Same shallow contract as the rest: an entry must at least identify itself,
+  // its stop and its outcome. `type` is checked against the KNOWN set, not just
+  // `typeof === 'string'`: every consumer looks the type up in a table
+  // (`TYPE_META` in the activity log), so one event with a type from a future
+  // build — or a hand-edited devtools entry — used to crash the whole
+  // `/driver/[id]` screen on load, and "Try again" crashed again because the
+  // blob is persisted. Unknown events are dropped here, at the door.
+  deliveryLog: (v): v is DeliveryEvent[] =>
+    Array.isArray(v) &&
+    v.every(
+      (e) =>
+        isRecord(e) &&
+        typeof e.id === 'string' &&
+        typeof e.at === 'string' &&
+        typeof e.stopId === 'string' &&
+        typeof e.type === 'string' &&
+        DELIVERY_EVENT_TYPES.has(e.type),
+    ),
 };
+
+/**
+ * The persisted slice of a state object, keys in `PERSISTED_KEYS` order (so
+ * serialised blobs from any tab compare byte-for-byte). This is persist's
+ * `partialize`, and what the cross-tab listener uses to predict its own write.
+ */
+function persistedSliceOf(s: PersistedSlice): PersistedSlice {
+  const out = {} as PersistedSlice;
+  for (const key of PERSISTED_KEYS) (out as Record<string, unknown>)[key] = s[key];
+  return out;
+}
+
+/** Exactly the string `persistStorage.setItem` would store for this slice. */
+function serializePersisted(slice: PersistedSlice): string {
+  return JSON.stringify({ state: slice, version: PERSIST_VERSION });
+}
 
 /**
  * Pick the persisted keys out of an untrusted blob (`state` of a stored value,
@@ -258,6 +365,7 @@ function migratePersisted(raw: unknown, fromVersion: number): PersistedSlice {
     delete picked.algorithm;
     delete picked.computeMs;
     delete picked.lastOptimizedAt;
+    delete picked.editedSinceOptimize;
   }
   return { ...INITIAL_PERSISTED, ...picked };
 }
@@ -382,29 +490,88 @@ const getServerHydrated = (): boolean => false;
 /** Known failure reasons — used to keep notes tidy when a stop is re-attempted / undone. */
 const FAILURE_REASONS = ['No one home', 'Wrong address', 'Damaged', 'Other'] as const;
 
+/**
+ * Hard cap on the persisted activity log; the oldest entries are dropped.
+ * 2000 events is ~300 KB of JSON worst case — far more than a demo day
+ * (45 stops) ever produces, and it keeps a wedged/looping caller from filling
+ * localStorage.
+ */
+export const MAX_LOG_EVENTS = 2000;
+
+/**
+ * Total budget for proof photos inside the persisted blob. localStorage is
+ * ~5 MB per origin and the plan itself takes ~250 KB, so 1.5 MB of thumbnails
+ * (≈ 40 at ~40 KB) is generous while leaving the plan room to grow. Over
+ * budget, the delivery is still recorded — only the photo is dropped, and the
+ * UI says so.
+ */
+export const PHOTO_BUDGET_BYTES = 1_500_000;
+
 /** Monotonic toast id so identical consecutive messages still re-trigger. */
 let toastSeq = 0;
 
-/** Light structural check on the seed payload before trusting the network. */
-function isSeedPayload(v: unknown): v is SeedPayload {
-  return (
-    isRecord(v) &&
-    isRecord(v.depot) &&
-    typeof v.depot.lat === 'number' &&
-    Array.isArray(v.drivers) &&
-    Array.isArray(v.stops)
-  );
+/** Per-tab counter so two events in the same millisecond still differ. */
+let eventSeq = 0;
+
+/**
+ * Event id: time-ordered prefix + a per-tab counter + a random suffix. Random
+ * because two tabs (or two devices sharing a blob) would otherwise collide on
+ * the same millisecond/counter pair; ids are only used as React keys and for
+ * de-duplication, never as a sort key (that is `at`).
+ */
+function newEventId(at: number): string {
+  eventSeq += 1;
+  return `e${at.toString(36)}-${eventSeq.toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** Which driver currently owns a stop (the route it sits in), or '' when unrouted. */
+function driverIdForStop(routes: Route[] | null, stopId: string): string {
+  return routes?.find((r) => r.stopIds.includes(stopId))?.driverId ?? '';
+}
+
+/**
+ * Bytes the proof photos already stored occupy: the length of each data URL,
+ * which is what the persisted blob actually carries (they are ASCII → 1 byte
+ * per character). The delivery sheet shows a photo's size with the same
+ * measure (`storedPhotoBytes` in components/driver/photo.ts), so what the
+ * driver reads on the sheet and what this budget counts can never disagree.
+ */
+function photoBytesInUse(stops: Stop[]): number {
+  let bytes = 0;
+  for (const s of stops) bytes += s.proof?.photo?.length ?? 0;
+  return bytes;
+}
+
+/** Append one event to the log, dropping the oldest beyond `MAX_LOG_EVENTS`. */
+function appendEvent(log: DeliveryEvent[], event: DeliveryEvent): DeliveryEvent[] {
+  const next = [...log, event];
+  return next.length > MAX_LOG_EVENTS ? next.slice(next.length - MAX_LOG_EVENTS) : next;
+}
+
+/** Drop empty / whitespace-only strings so the blob never carries `""`. */
+function trimmed(v: string | undefined): string | undefined {
+  const t = v?.trim();
+  return t ? t : undefined;
 }
 
 /** Light structural check on an optimize response before trusting the network. */
+const HHMM_RE = /^\d{1,2}:\d{2}$/;
+
+/**
+ * Structural check on what `/api/optimize` returned. A swapped-in algorithm
+ * (the whole point of the endpoint) is the most likely source of surprises, so
+ * routes must have `stopIds`/`legs` arrays and every ETA must be "HH:MM" -
+ * anything else falls back to the local optimizer instead of reaching the UI.
+ */
 function isOptimizeResponse(v: unknown): v is OptimizeResponse {
-  return (
-    isRecord(v) &&
-    Array.isArray(v.routes) &&
-    isRecord(v.metrics) &&
-    typeof v.algorithm === 'string' &&
-    typeof v.computeMs === 'number'
-  );
+  if (!isRecord(v) || !Array.isArray(v.routes) || !isRecord(v.metrics)) return false;
+  if (typeof v.algorithm !== 'string' || typeof v.computeMs !== 'number') return false;
+  if (!Array.isArray(v.unassignedStopIds)) return false;
+  return v.routes.every((r) => {
+    if (!isRecord(r) || typeof r.driverId !== 'string') return false;
+    if (!Array.isArray(r.stopIds) || !Array.isArray(r.legs) || !isRecord(r.etaByStopId)) return false;
+    return Object.values(r.etaByStopId).every((eta) => typeof eta === 'string' && HHMM_RE.test(eta));
+  });
 }
 
 /**
@@ -456,6 +623,58 @@ function assignmentsFromRoutes(drivers: Driver[], routes: Route[] | null): Recor
   return assignments;
 }
 
+/**
+ * The plan that results from moving `stopId` onto `toDriverId` at `index`
+ * (default: append), or `null` when the move is impossible (no depot, unknown
+ * driver / stop, a stop that is already done) or changes nothing.
+ *
+ * Pure — it reads a state snapshot and returns the new plan without touching
+ * the store — because two callers need the same reorder-and-reschedule with
+ * DIFFERENT bookkeeping: `moveStop` is a dispatcher's hand edit and sets
+ * `editedSinceOptimize` (the panel then says "edited by hand"), while
+ * `deferStop` is a driver's "Skip for now" and must not — the dispatcher never
+ * touched this plan, and mislabelling it hides whether their own edits are
+ * still in place.
+ */
+function planAfterMove(
+  state: Pick<AppState, 'depot' | 'drivers' | 'stops' | 'routes'>,
+  stopId: string,
+  toDriverId: string,
+  index?: number,
+): { routes: Route[]; optimizedMetrics: RouteMetrics } | null {
+  const { depot, drivers, stops, routes } = state;
+  if (!depot) return null;
+  if (!drivers.some((d) => d.id === toDriverId)) return null;
+  const stop = stops.find((s) => s.id === stopId);
+  if (!stop) return null;
+  if (stop.status !== 'pending') return null; // done stops are not movable
+
+  // Before any optimisation there is no plan: start from an empty one
+  // (every driver `[]`) so the very first "Reassign to…" creates a route.
+  // `algorithm` / `lastOptimizedAt` stay null (nothing was optimised) and
+  // `baselineMetrics` stays null (there is no "before" to compare with).
+  const before = assignmentsFromRoutes(drivers, routes);
+  const assignments = assignmentsFromRoutes(drivers, routes);
+
+  // Remove from wherever it currently sits (it may be unassigned).
+  for (const id of Object.keys(assignments)) {
+    assignments[id] = assignments[id].filter((s) => s !== stopId);
+  }
+
+  // Insert at the requested position (default append; clamped).
+  const target = assignments[toDriverId];
+  const at =
+    index === undefined || Number.isNaN(index)
+      ? target.length
+      : Math.max(0, Math.min(Math.trunc(index), target.length));
+  target.splice(at, 0, stopId);
+
+  if (sameAssignments(before, assignments)) return null; // dropped where it already was
+
+  const out = schedule({ depot, drivers, stops, assignments });
+  return { routes: out.routes, optimizedMetrics: out.metrics };
+}
+
 /** True when both assignment maps hold the same ordered ids for every driver. */
 function sameAssignments(a: Record<string, string[]>, b: Record<string, string[]>): boolean {
   const keys = Object.keys(a);
@@ -488,26 +707,20 @@ export const useAppStore = create<AppState>()(
         // that is what preserves delivery progress across reloads.
         if (get().depot) return;
 
-        let seed: SeedPayload | null = null;
-        try {
-          const res = await fetch('/api/seed', { cache: 'no-store' });
-          if (res.ok) {
-            const json: unknown = await res.json();
-            if (isSeedPayload(json)) seed = json;
-          }
-        } catch {
-          // network / parsing failure — fall through to the local seed
-        }
-        if (!seed) seed = getSeed();
-
-        // Guard against a concurrent load that finished while we awaited.
-        if (get().depot) return;
+        // The seed is bundled into this very chunk (`getSeed()`), so fetching
+        // `/api/seed` would only put a request — a serverless round trip on a
+        // deployed origin — in front of the first map frame, which gates on
+        // `depot`, for data we already hold. The endpoint stays for API
+        // consumers; the app itself never waits on it. (Kept `async` so the
+        // call sites' `await`/`void` stay valid.)
+        const seed = getSeed();
         set({ depot: seed.depot, drivers: seed.drivers, stops: seed.stops });
       },
 
       // -- optimization -----------------------------------------------------
 
-      async optimize() {
+      async optimize(options): Promise<void> {
+        const toastStyle: OptimizeToast = options?.toast ?? 'dispatch';
         const state = get();
         if (state.isOptimizing) return; // ignore concurrent calls
         if (!state.depot) {
@@ -543,26 +756,54 @@ export const useAppStore = create<AppState>()(
           } catch (err) {
             console.warn('[RouteIQ] /api/optimize unreachable; optimizing locally', err);
           }
-          if (!result) result = optimizeLocal(req);
+          // The assignment / sequencing / repair stages are only needed when
+          // the user actually optimizes (and the API is down), so they are
+          // loaded on demand instead of riding along in every page's boot
+          // chunk; `schedule()` above is the only piece needed synchronously
+          // (manual moves). The load is allowed to FAIL on its own (a stale
+          // deploy's hashed chunk is gone, the device is offline): it must not
+          // throw away a plan the API already returned — that would turn a
+          // missing "before" comparison into "Optimization failed".
+          let optimizer: typeof import('@/lib/optimizer') | null = null;
+          try {
+            optimizer = await import('@/lib/optimizer');
+          } catch (err) {
+            console.warn('[RouteIQ] optimizer chunk unavailable', err);
+          }
+          if (!result) {
+            // Nothing from the API and no local optimizer: there is no plan to
+            // be had, and the catch below turns this into the error state.
+            if (!optimizer) throw new Error('Optimizer unavailable offline');
+            result = optimizer.optimize(req);
+          }
 
-          // Baseline ("before") is always computed locally — it is cheap.
-          const base = baseline(req);
+          // Baseline ("before") is always computed locally — it is cheap — but
+          // it is a comparison, not the plan: without the chunk the plan still
+          // ships and the dispatcher simply sees no "before" numbers.
+          const base = optimizer ? optimizer.baseline(req) : null;
 
           set({
             routes: result.routes,
             optimizedMetrics: result.metrics,
-            baselineMetrics: base.metrics,
+            baselineMetrics: base ? base.metrics : null,
             algorithm: result.algorithm,
             computeMs: result.computeMs,
             lastOptimizedAt: new Date().toISOString(),
+            editedSinceOptimize: false,
             isOptimizing: false,
             optimizeError: null,
           });
-          get().showToast(`Optimized in ${Math.round(result.computeMs)} ms · ${result.algorithm}`, 'success');
+          if (toastStyle === 'dispatch') {
+            get().showToast(`Optimized in ${Math.round(result.computeMs)} ms · ${result.algorithm}`, 'success');
+          } else if (toastStyle === 'driver') {
+            get().showToast('Your route is ready', 'success');
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Optimization failed';
           set({ isOptimizing: false, optimizeError: message });
-          get().showToast(message, 'error');
+          // A failure is worth saying out loud whoever asked (the driver screen
+          // shows its "Try again" state behind the toast); only 'none' is mute.
+          if (toastStyle !== 'none') get().showToast(message, 'error');
         }
       },
 
@@ -577,49 +818,30 @@ export const useAppStore = create<AppState>()(
           algorithm: null,
           computeMs: null,
           lastOptimizedAt: null,
+          editedSinceOptimize: false,
           optimizeError: null,
           isOptimizing: false,
           selectedStopId: null,
           hiddenDriverIds: [],
+          // Statuses go back to pending, so yesterday's records would describe
+          // deliveries that no longer exist: clear the log with them.
+          deliveryLog: [],
           // activeDriverId is intentionally kept so the driver phone stays on
           // its driver after a reset.
         });
-        await get().loadSeed(); // depot is null → fetches a fresh seed with fresh statuses
+        // depot is null → loadSeed() loads a fresh (deep-cloned) bundled seed,
+        // so every status is back to pending. No network is involved.
+        await get().loadSeed();
         get().showToast('Demo reset', 'info');
       },
 
       // -- manual reassignment ---------------------------------------------
 
       moveStop(stopId, toDriverId, index): boolean {
-        const { depot, drivers, stops, routes } = get();
-        if (!depot) return false;
-        if (!drivers.some((d) => d.id === toDriverId)) return false;
-        if (!stops.some((s) => s.id === stopId)) return false;
-
-        // Before any optimisation there is no plan: start from an empty one
-        // (every driver `[]`) so the very first "Reassign to…" creates a route.
-        // `algorithm` / `lastOptimizedAt` stay null (nothing was optimised) and
-        // `baselineMetrics` stays null (there is no "before" to compare with).
-        const before = assignmentsFromRoutes(drivers, routes);
-        const assignments = assignmentsFromRoutes(drivers, routes);
-
-        // Remove from wherever it currently sits (it may be unassigned).
-        for (const id of Object.keys(assignments)) {
-          assignments[id] = assignments[id].filter((s) => s !== stopId);
-        }
-
-        // Insert at the requested position (default append; clamped).
-        const target = assignments[toDriverId];
-        const at =
-          index === undefined || Number.isNaN(index)
-            ? target.length
-            : Math.max(0, Math.min(Math.trunc(index), target.length));
-        target.splice(at, 0, stopId);
-
-        if (sameAssignments(before, assignments)) return false; // dropped where it already was
-
-        const out = schedule({ depot, drivers, stops, assignments });
-        set({ routes: out.routes, optimizedMetrics: out.metrics });
+        // A hand edit: the plan is no longer purely what the optimizer produced.
+        const next = planAfterMove(get(), stopId, toDriverId, index);
+        if (!next) return false;
+        set({ ...next, editedSinceOptimize: true });
         return true;
       },
 
@@ -629,7 +851,8 @@ export const useAppStore = create<AppState>()(
        * Status changes:
        *  - `delivered` / `failed` stamp `deliveredAt` (attempt time); a reason
        *    passed as `notes` (failed) is prefixed onto the stop's notes via
-       *    `composeNotes`;
+       *    `composeNotes`; `failed` also clears any `proof` a previous
+       *    successful delivery of that stop left behind;
        *  - `pending` (undo / re-attempt) clears `deliveredAt` AND strips a
        *    leading known failure reason from the notes, restoring the original
        *    delivery instructions — otherwise the Next Stop card would show
@@ -642,11 +865,20 @@ export const useAppStore = create<AppState>()(
             const next: Stop = { ...stop, status };
             if (status === 'pending') {
               delete next.deliveredAt;
+              // An undone mis-tap must leave no trace: the proof of delivery
+              // goes with the status (the log still records that it happened).
+              delete next.proof;
               const restored = stripFailureReason(stop.notes);
               if (restored === undefined) delete next.notes;
               else next.notes = restored;
             } else {
               next.deliveredAt = new Date().toISOString();
+              // A failed attempt must not inherit the previous delivery's
+              // proof: the stop details sheet would show "Handed to recipient"
+              // and the photo of a parcel that is back in the van, and the
+              // photo would keep eating the storage budget. `recordFailure`
+              // stamps its own `{ at, note }` after this.
+              if (status === 'failed') delete next.proof;
             }
             if (notes !== undefined && notes.trim() !== '') {
               next.notes = composeNotes(notes, next.notes);
@@ -654,6 +886,124 @@ export const useAppStore = create<AppState>()(
             return next;
           }),
         }));
+      },
+
+      // -- driver records (proof of delivery + activity log) -----------------
+      //
+      // These are the actions the driver app calls; `setStopStatus` stays the
+      // low-level primitive (used by the dispatcher-side flows and by these).
+      // Every one of them appends exactly one `DeliveryEvent`, so components
+      // never build log entries by hand and the log can be trusted as the
+      // single source for the activity sheet and the end-of-day report.
+
+      recordDelivery(stopId, proof): RecordDeliveryResult {
+        const state = get();
+        const stop = state.stops.find((s) => s.id === stopId);
+        if (!stop) return { ok: false, photoDropped: false };
+
+        const now = new Date();
+        const at = now.toISOString();
+        const photo = trimmed(proof?.photo);
+        // Keep the persisted blob inside its budget: the delivery is recorded
+        // either way, only the picture is sacrificed (the caller toasts).
+        const photoDropped =
+          photo !== undefined && photoBytesInUse(state.stops) + photo.length > PHOTO_BUDGET_BYTES;
+        const stored: DeliveryProof = { at };
+        if (proof?.method) stored.method = proof.method;
+        const recipientName = trimmed(proof?.recipientName);
+        if (recipientName) stored.recipientName = recipientName;
+        const note = trimmed(proof?.note);
+        if (note) stored.note = note;
+        if (photo && !photoDropped) stored.photo = photo;
+
+        const event: DeliveryEvent = {
+          id: newEventId(now.getTime()),
+          at,
+          driverId: driverIdForStop(state.routes, stopId),
+          stopId,
+          type: 'delivered',
+        };
+        if (stored.method) event.method = stored.method;
+        if (recipientName) event.recipientName = recipientName;
+        if (note) event.note = note;
+        if (stored.photo) event.hasPhoto = true;
+
+        set((s) => ({
+          stops: s.stops.map((x) =>
+            x.id === stopId ? { ...x, status: 'delivered', deliveredAt: at, proof: stored } : x,
+          ),
+          deliveryLog: appendEvent(s.deliveryLog, event),
+        }));
+        return { ok: true, photoDropped };
+      },
+
+      recordFailure(stopId, reason, note): boolean {
+        const state = get();
+        if (!state.stops.some((s) => s.id === stopId)) return false;
+        const trimmedNote = trimmed(note);
+        // The reason still goes into `notes` (unchanged mechanism, #25); the
+        // free-text note rides along on `proof` so the dispatcher sees it too.
+        state.setStopStatus(stopId, 'failed', reason);
+        const at = new Date().toISOString();
+        set((s) => ({
+          stops: trimmedNote
+            ? s.stops.map((x) => (x.id === stopId ? { ...x, proof: { at, note: trimmedNote } } : x))
+            : s.stops,
+          deliveryLog: appendEvent(s.deliveryLog, {
+            id: newEventId(Date.now()),
+            at,
+            driverId: driverIdForStop(s.routes, stopId),
+            stopId,
+            type: 'failed',
+            reason,
+            ...(trimmedNote ? { note: trimmedNote } : {}),
+          }),
+        }));
+        return true;
+      },
+
+      undoStop(stopId): boolean {
+        const state = get();
+        const stop = state.stops.find((s) => s.id === stopId);
+        if (!stop || stop.status === 'pending') return false;
+        state.setStopStatus(stopId, 'pending');
+        set((s) => ({
+          deliveryLog: appendEvent(s.deliveryLog, {
+            id: newEventId(Date.now()),
+            at: new Date().toISOString(),
+            driverId: driverIdForStop(s.routes, stopId),
+            stopId,
+            type: 'undo',
+          }),
+        }));
+        return true;
+      },
+
+      deferStop(stopId): boolean {
+        const state = get();
+        const stop = state.stops.find((s) => s.id === stopId);
+        if (!stop || stop.status !== 'pending') return false;
+        const driverId = driverIdForStop(state.routes, stopId);
+        if (!driverId) return false;
+        // Same reorder + re-schedule as a dispatcher move (same driver, no index
+        // = append), so ETAs/metrics stay consistent — but deliberately WITHOUT
+        // `editedSinceOptimize`: a driver skipping their own stop is not the
+        // dispatcher editing the plan by hand, and the dispatcher panel used to
+        // claim it was. `null` here means the stop is already last (nothing to
+        // skip), which the caller explains in a toast.
+        const next = planAfterMove(state, stopId, driverId);
+        if (!next) return false;
+        set((s) => ({
+          ...next,
+          deliveryLog: appendEvent(s.deliveryLog, {
+            id: newEventId(Date.now()),
+            at: new Date().toISOString(),
+            driverId,
+            stopId,
+            type: 'deferred',
+          }),
+        }));
+        return true;
       },
 
       // -- UI state ---------------------------------------------------------
@@ -674,9 +1024,9 @@ export const useAppStore = create<AppState>()(
         set({ selectedStopId: id });
       },
 
-      showToast(message, tone = 'info') {
+      showToast(message, tone = 'info', action) {
         toastSeq += 1;
-        set({ toast: { id: toastSeq, message, tone } });
+        set({ toast: { id: toastSeq, message, tone, ...(action ? { action } : {}) } });
       },
 
       dismissToast() {
@@ -689,15 +1039,27 @@ export const useAppStore = create<AppState>()(
 
       // -- export -----------------------------------------------------------
 
+      /**
+       * Self-contained plan export: everything a consumer needs to resolve the
+       * ids in `routes` (the stops themselves, with status and windows), plus
+       * the "before" numbers and where the plan came from.
+       */
       exportRoutesJson() {
-        const { depot, drivers, routes, optimizedMetrics } = get();
+        const { depot, drivers, stops, routes, optimizedMetrics, baselineMetrics, algorithm, lastOptimizedAt } =
+          get();
+        const assigned = new Set((routes ?? []).flatMap((r) => r.stopIds));
         return JSON.stringify(
           {
             exportedAt: new Date().toISOString(),
+            algorithm,
+            optimizedAt: lastOptimizedAt,
             depot,
             drivers,
+            stops,
             routes: routes ?? [],
+            unassignedStopIds: stops.filter((s) => !assigned.has(s.id)).map((s) => s.id),
             metrics: optimizedMetrics,
+            baselineMetrics,
           },
           null,
           2,
@@ -709,20 +1071,7 @@ export const useAppStore = create<AppState>()(
       version: PERSIST_VERSION,
       storage: persistStorage,
       // Persist data + durable UI prefs only; ephemeral flags stay in memory.
-      // (Same key order as PERSISTED_KEYS so serialised blobs compare equal.)
-      partialize: (s): PersistedSlice => ({
-        depot: s.depot,
-        drivers: s.drivers,
-        stops: s.stops,
-        routes: s.routes,
-        baselineMetrics: s.baselineMetrics,
-        optimizedMetrics: s.optimizedMetrics,
-        algorithm: s.algorithm,
-        computeMs: s.computeMs,
-        lastOptimizedAt: s.lastOptimizedAt,
-        activeDriverId: s.activeDriverId,
-        hiddenDriverIds: s.hiddenDriverIds,
-      }),
+      partialize: (s): PersistedSlice => persistedSliceOf(s),
       // Only known keys with a sane shape make it into the store; anything else
       // keeps its default. Ephemeral fields are never in the blob.
       merge: (persisted, current) => ({ ...current, ...pickPersisted(persisted) }),
@@ -762,7 +1111,12 @@ export const useAppStore = create<AppState>()(
 // Cross-tab sync
 // ---------------------------------------------------------------------------
 
-let crossTabInstalled = false;
+/**
+ * "Installed" flag lives on `window`, not in module scope: in development a
+ * hot reload re-evaluates this module, and a module-level flag would leave the
+ * previous listener (bound to the orphaned store) attached alongside the new one.
+ */
+const CROSS_TAB_FLAG = '__routeiqCrossTabSync';
 
 /**
  * Listen for writes to `PERSIST_KEY` made by OTHER tabs (the `storage` event
@@ -772,9 +1126,10 @@ let crossTabInstalled = false;
  * to call on the server (no-op). Exported for tests.
  */
 export function installCrossTabSync(): void {
-  if (crossTabInstalled || typeof window === 'undefined') return;
-  crossTabInstalled = true;
-  window.addEventListener('storage', (e: StorageEvent) => {
+  if (typeof window === 'undefined') return;
+  const w = window as Window & { [CROSS_TAB_FLAG]?: () => void };
+  w[CROSS_TAB_FLAG]?.(); // dev HMR: detach the previous module instance's listener
+  const onStorage = (e: StorageEvent) => {
     if (e.key !== PERSIST_KEY) return; // includes `null` (storage.clear()) — keep our copy
     if (!e.newValue) return; // key removed by another tab (reset / corrupt blob) — keep our copy
     try {
@@ -782,15 +1137,21 @@ export function installCrossTabSync(): void {
       if (!isRecord(parsed)) return;
       const partial = pickPersisted(parsed.state);
       if (Object.keys(partial).length === 0) return;
-      // Record the blob as "what storage holds" BEFORE applying it, so the
-      // write that `setState` triggers is recognised as identical and skipped
-      // (no echo, no ping-pong between tabs).
-      knownStored = e.newValue;
+      // Record what THIS tab will serialise after applying the update as "what
+      // storage holds", so the write that `setState` triggers is recognised as
+      // identical and skipped (no echo, no ping-pong between tabs). Computed
+      // from the merged slice rather than taken verbatim from `e.newValue`:
+      // a blob from a tab running an older/newer build (a key added or dropped
+      // since) would otherwise never compare equal and each tab would echo the
+      // other's writes back forever.
+      knownStored = serializePersisted({ ...persistedSliceOf(useAppStore.getState()), ...partial });
       useAppStore.setState(partial);
     } catch (err) {
       console.warn('[RouteIQ] ignoring unreadable cross-tab update', err);
     }
-  });
+  };
+  window.addEventListener('storage', onStorage);
+  w[CROSS_TAB_FLAG] = () => window.removeEventListener('storage', onStorage);
 }
 
 installCrossTabSync();
@@ -844,23 +1205,31 @@ export interface DriverProgress {
   nextIndex: number; // index (in route order) of the first pending stop, -1 when complete
 }
 
-/** Progress summary for a driver's route (safe for `undefined` route). */
+/**
+ * Progress summary for a driver's route (safe for `undefined` route). Stop ids
+ * that are not in `stopsById` (inconsistent persisted / cross-tab data) are
+ * skipped entirely - they are neither counted nor offered as the next stop, so
+ * the screen can never wedge on a stop it cannot show.
+ */
 export function driverProgress(
   route: Route | undefined,
   stopsById: Record<string, Stop>,
 ): DriverProgress {
   if (!route) return { total: 0, done: 0, delivered: 0, failed: 0, nextIndex: -1 };
+  let total = 0;
   let delivered = 0;
   let failed = 0;
   let nextIndex = -1;
   route.stopIds.forEach((id, i) => {
-    const status = stopsById[id]?.status ?? 'pending';
-    if (status === 'delivered') delivered += 1;
-    else if (status === 'failed') failed += 1;
+    const stop = stopsById[id];
+    if (!stop) return;
+    total += 1;
+    if (stop.status === 'delivered') delivered += 1;
+    else if (stop.status === 'failed') failed += 1;
     else if (nextIndex === -1) nextIndex = i;
   });
   return {
-    total: route.stopIds.length,
+    total,
     done: delivered + failed,
     delivered,
     failed,

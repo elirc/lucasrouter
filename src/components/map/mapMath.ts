@@ -4,10 +4,49 @@
 
 import type { Depot, Route, RouteLeg, Stop } from '@/lib/types';
 import type { LatLngTuple } from '@/lib/geo';
-import { getLegPath } from '@/data/paths';
 
 const EARTH_RADIUS_M = 6_371_000;
 const DEG = Math.PI / 180;
+
+// ---------------------------------------------------------------------------
+// Road geometry (loaded on demand)
+// ---------------------------------------------------------------------------
+
+/**
+ * `src/data/paths.json` is ~96 KB — a quarter of everything the map downloads —
+ * and nothing on screen needs it until there is a route to draw. A static
+ * import would put it in the Leaflet chunk group, so a dispatcher who has not
+ * optimized yet (and every first visit) pays for geometry that is never drawn.
+ * It is therefore pulled in with a dynamic import, and `RoutePolyline` waits
+ * for `loadRoadPaths()` before drawing rather than flashing straight lines that
+ * snap to roads a moment later. A failed load resolves to "no road paths", so
+ * routes still render as straight segments instead of not at all.
+ */
+type GetLegPath = (fromId: string, toId: string) => LatLngTuple[] | undefined;
+
+const NO_ROAD_PATHS: GetLegPath = () => undefined;
+
+let getLegPath: GetLegPath | null = null;
+let roadPathsLoad: Promise<void> | null = null;
+
+/** Fetch the precomputed road geometry (idempotent; never rejects). */
+export function loadRoadPaths(): Promise<void> {
+  roadPathsLoad ??= import('@/data/paths').then(
+    (m) => {
+      getLegPath = m.getLegPath;
+    },
+    (err: unknown) => {
+      console.warn('[RouteIQ] road geometry unavailable; drawing straight legs', err);
+      getLegPath = NO_ROAD_PATHS;
+    },
+  );
+  return roadPathsLoad;
+}
+
+/** True once `loadRoadPaths()` has settled (successfully or not). */
+export function roadPathsReady(): boolean {
+  return getLegPath !== null;
+}
 
 /** Great-circle distance in metres between two [lat, lng] tuples. */
 export function haversineMeters(a: LatLngTuple, b: LatLngTuple): number {
@@ -48,7 +87,8 @@ export function resolvePoint(
  * Coordinates a leg is drawn through, in priority order:
  *  1. `leg.path` if the optimizer supplied one,
  *  2. the precomputed road polyline from `src/data/paths.json` (seed pairs only,
- *     fetched once from OSRM by scripts/precompute-paths.ts — never at runtime),
+ *     fetched once from OSRM by scripts/precompute-paths.ts — never at runtime,
+ *     and only in the browser once `loadRoadPaths()` has resolved),
  *  3. a straight segment between the two endpoints.
  * Road paths are snapped so the drawn line starts/ends exactly on the markers.
  */
@@ -61,7 +101,7 @@ export function legPositions(
   const from = resolvePoint(leg.fromId, depot, stopsById);
   const to = resolvePoint(leg.toId, depot, stopsById);
   if (!from || !to) return [];
-  const road = getLegPath(leg.fromId, leg.toId);
+  const road = getLegPath?.(leg.fromId, leg.toId);
   if (road && road.length >= 2) return [from, ...road, to];
   return [from, to];
 }

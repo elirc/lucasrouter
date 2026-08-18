@@ -4,6 +4,45 @@
 export type StopStatus = 'pending' | 'delivered' | 'failed';
 export type Priority = 'standard' | 'priority' | 'overnight';
 
+/** How a parcel was handed over. Mirrors the driver app's delivery sheet. */
+export type DeliveryMethod = 'handed' | 'door' | 'neighbour' | 'desk';
+
+/**
+ * Proof of delivery captured by the driver when a stop is completed.
+ * Everything except `at` is optional: the fast path (tap Delivered, confirm the
+ * default method) records only `{ method: 'handed', at }`.
+ *
+ * `photo` is a *downscaled* JPEG data URL (longest side ≤ 320 px, ~40 KB) —
+ * never the original camera frame: the whole store lives in localStorage.
+ */
+export interface DeliveryProof {
+  method?: DeliveryMethod;
+  recipientName?: string;
+  note?: string;
+  photo?: string; // small JPEG data URL, ≤ ~40 KB
+  at: string; // ISO
+}
+
+/**
+ * One entry of the append-only driver activity log (`deliveryLog` in the
+ * store). Denormalised on purpose: the log must still read correctly after the
+ * dispatcher re-optimizes or a stop is undone, so it copies the outcome rather
+ * than pointing at the stop's current status. `hasPhoto` (not the photo
+ * itself) keeps the log small — the image lives once, on `Stop.proof`.
+ */
+export interface DeliveryEvent {
+  id: string;
+  at: string; // ISO
+  driverId: string;
+  stopId: string;
+  type: 'delivered' | 'failed' | 'undo' | 'deferred';
+  method?: DeliveryMethod;
+  reason?: string;
+  recipientName?: string;
+  note?: string;
+  hasPhoto?: boolean;
+}
+
 export interface Stop {
   id: string; // e.g. "S001"
   address: string; // human-readable Madison address
@@ -17,6 +56,8 @@ export interface Stop {
   status: StopStatus;
   notes?: string;
   deliveredAt?: string; // ISO timestamp
+  /** Set when the stop is delivered (failed attempts may carry only a note). */
+  proof?: DeliveryProof;
 }
 
 export interface Driver {

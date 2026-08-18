@@ -1,10 +1,10 @@
 'use client';
 
-import { ChevronRight, PartyPopper } from 'lucide-react';
+import { ChevronRight, FileDown, PartyPopper } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode, Ref } from 'react';
 
-import { Card } from '@/components/ui';
+import { Button, Card } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatKm } from '@/lib/geo';
 import { formatDuration } from '@/lib/time';
@@ -16,24 +16,38 @@ export interface RouteCompleteCardProps {
   stopsById: Record<string, Stop>;
   delivered: number;
   failed: number;
+  /** Stops moved to the end of the route today (from the activity log). */
+  deferred: number;
+  /**
+   * Wall-clock minutes between the first and the last recorded event — what
+   * the day actually took, next to what was planned. 0 when the route was
+   * completed without any recorded event (e.g. progress from another device).
+   */
+  actualMinutes: number;
+  /** Download the per-stop CSV / the raw event JSON. */
+  onDownloadCsv: () => void;
+  onDownloadJson: () => void;
   /** Ref to the heading (`tabIndex={-1}`) so the parent can focus it when the route completes. */
   headingRef?: Ref<HTMLHeadingElement>;
   className?: string;
 }
 
-function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
+function Stat({ label, value, hint, tone }: { label: string; value: ReactNode; hint?: string; tone?: string }) {
   return (
     <div className="rounded-lg bg-slate-50 px-3 py-2">
       <dt className="text-[11px] font-medium tracking-wide text-slate-600 uppercase">{label}</dt>
-      <dd className={cn('mt-0.5 text-lg font-semibold text-slate-900 tabular-nums', tone)}>{value}</dd>
+      <dd className={cn('mt-0.5 text-lg font-semibold text-slate-900 tabular-nums', tone)}>
+        {value}
+        {hint && <span className="block text-[11px] font-normal text-slate-600 tabular-nums">{hint}</span>}
+      </dd>
     </div>
   );
 }
 
 /**
- * Shown in place of the next-stop card once every stop is delivered or
- * failed: outcome counts, packages delivered, planned time + distance and a
- * link back to the driver picker.
+ * Shown in place of the next-stop card once every stop is delivered or failed:
+ * the day's outcome counts, packages delivered, actual vs planned time, and
+ * the end-of-day report downloads (CSV per stop, JSON per event).
  */
 export function RouteCompleteCard({
   route,
@@ -41,6 +55,10 @@ export function RouteCompleteCard({
   stopsById,
   delivered,
   failed,
+  deferred,
+  actualMinutes,
+  onDownloadCsv,
+  onDownloadJson,
   headingRef,
   className,
 }: RouteCompleteCardProps) {
@@ -82,14 +100,27 @@ export function RouteCompleteCard({
         <Stat label="Delivered" value={delivered} tone="text-emerald-700" />
         <Stat label="Failed" value={failed} tone={failed > 0 ? 'text-red-700' : undefined} />
         <Stat label="Packages delivered" value={packagesDelivered} />
-        <Stat label="Route time" value={formatDuration(route.totalMinutes)} />
-        <Stat label="Planned distance" value={formatKm(route.totalDistanceKm)} />
-        <Stat label="Stops" value={route.stopIds.length} />
+        <Stat label="Skipped" value={deferred} tone={deferred > 0 ? 'text-amber-800' : undefined} />
+        <Stat
+          label="Time on route"
+          value={actualMinutes > 0 ? formatDuration(actualMinutes) : '—'}
+          hint={`planned ${formatDuration(route.totalMinutes)}`}
+        />
+        <Stat label="Planned distance" value={formatKm(route.totalDistanceKm)} hint={`${route.stopIds.length} stops`} />
       </dl>
+
+      <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
+        <Button icon={<FileDown className="size-4" />} onClick={onDownloadCsv}>
+          Download report
+        </Button>
+        <Button variant="secondary" onClick={onDownloadJson} aria-label="Download today's events as JSON">
+          JSON
+        </Button>
+      </div>
 
       <Link
         href="/driver"
-        className="mt-4 inline-flex min-h-[44px] w-full items-center justify-center gap-1 rounded-xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-900 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+        className="mt-2 inline-flex min-h-[44px] w-full items-center justify-center gap-1 rounded-xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-900 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
       >
         Back to drivers
         <ChevronRight className="size-4 text-slate-400" aria-hidden="true" />

@@ -22,7 +22,7 @@
   border-radius: 9999px;
 }
 
-/* "You are here" pulse. */
+/* Leg-start dot pulse (driver map). */
 @keyframes riq-pulse {
   0% {
     transform: scale(0.45);

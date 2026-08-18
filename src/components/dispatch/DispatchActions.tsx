@@ -6,33 +6,12 @@ import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
+// Shared with the driver's end-of-day report (src/lib/download.ts).
+import { downloadText, todayStamp } from '@/lib/download';
 import { useAppStore } from '@/store/useAppStore';
 
 export interface DispatchActionsProps {
   className?: string;
-}
-
-/** Local YYYY-MM-DD for the export filename. */
-function todayStamp(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-/** Trigger a browser download of `text` as `filename` via a temporary <a download>. */
-function downloadText(filename: string, text: string, type = 'application/json') {
-  const blob = new Blob([text], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Give the browser a tick to start the download before revoking.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** How long the inline "Reset? Yes / No" confirmation stays armed. */
@@ -63,15 +42,24 @@ export function DispatchActions({ className }: DispatchActionsProps) {
     return () => clearTimeout(t);
   }, [confirming]);
 
+  // Return focus to the Reset button once it is enabled again. Focusing it
+  // synchronously after `setResetting(false)` would hit a still-disabled
+  // button (the state update is batched) and drop focus to <body>.
+  const refocusResetRef = useRef(false);
+  useEffect(() => {
+    if (resetting || !refocusResetRef.current) return;
+    refocusResetRef.current = false;
+    resetRef.current?.focus();
+  }, [resetting]);
+
   const onConfirmReset = async () => {
     setConfirming(false);
     setResetting(true);
     try {
       await resetDemo();
     } finally {
+      refocusResetRef.current = true;
       setResetting(false);
-      // Return focus to the (re-rendered) Reset button.
-      resetRef.current?.focus();
     }
   };
 

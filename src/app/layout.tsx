@@ -42,11 +42,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en" className={inter.variable}>
-      <head>
-        {/* OSM tiles are the map's LCP image: open the connection early. */}
-        <link rel="preconnect" href="https://tile.openstreetmap.org" crossOrigin="anonymous" />
-        <link rel="dns-prefetch" href="https://tile.openstreetmap.org" />
-      </head>
+      {/* No tile preconnect here: the landing and driver-picker pages never show
+          a map, and an unused preconnect only takes bandwidth and a socket from
+          the requests they do need. MapSkeleton opens the connection instead, so
+          the hint ships exactly on the pages that render a map. */}
       <body className="min-h-dvh bg-slate-100 font-sans text-slate-900">
         {children}
         {/* No <Toast /> here: it reads the store, which would drag the optimizer + seed

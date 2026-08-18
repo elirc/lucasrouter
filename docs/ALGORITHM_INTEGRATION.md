@@ -8,7 +8,7 @@ TL;DR: keep `OptimizeRequest → OptimizeResponse` (`src/lib/types.ts`), keep th
 
 ## 1. The contract, field by field
 
-All types live in [`src/lib/types.ts`](../src/lib/types.ts). Times are `"HH:MM"` 24-hour strings, distances are kilometres, durations are minutes.
+All types live in [`src/lib/types.ts`](../src/lib/types.ts). Times are `"HH:MM"` 24-hour strings on the clock of the shift day, distances are kilometres, durations are minutes. Inputs (`shiftStart`, time windows) are `00:00`–`23:59`; output ETAs may run **past midnight GTFS-style** (`"25:13"` = 01:13 the next day) so they stay monotonic and comparable to a same-day window — the UI renders them as `1:13 AM +1`.
 
 **Distance model of the placeholder.** RouteIQ has no road network at runtime, so every kilometre it plans with *and reports* (`RouteLeg.distanceKm`, `Route.totalDistanceKm`, `RouteMetrics.totalDistanceKm`) is an **estimated road km = great-circle (haversine) km × 1.3**, and drive time is `roadKm / avgSpeedKmh × 60`. A production algorithm with a real router should report its real road km / minutes in the same fields; the UI just displays them (see [§6](#6-what-the-ui-does-after-you-return) for how that affects the before/after card).
 
@@ -71,7 +71,7 @@ All types live in [`src/lib/types.ts`](../src/lib/types.ts). Times are `"HH:MM"`
 | `legs` | `RouteLeg[]` | Closed chain `DEPOT → stopIds[0] → … → stopIds[n-1] → DEPOT`, i.e. `stopIds.length + 1` legs, or `[]` when there are no stops. |
 | `totalDistanceKm` | `number` | Sum of leg distances (estimated road km), 2 decimals. |
 | `totalMinutes` | `number` | Depot-to-depot duration = drive + service + waiting, integer. |
-| `etaByStopId` | `Record<string, "HH:MM">` | Arrival time for **every** id in `stopIds` (after any wait). |
+| `etaByStopId` | `Record<string, "HH:MM">` | Arrival time for **every** id in `stopIds` (after any wait). Hours may exceed 23 when the route crosses midnight (`"25:13"`); never wrap. |
 
 `RouteLeg`
 
@@ -106,8 +106,10 @@ The route handler validates the body with zod **before** any algorithm runs and 
 | **duplicate driver ids** | `drivers` | `stopsPerDriver` / `Route.driverId` are keyed by driver id |
 | a stop whose id is the literal **`"DEPOT"`** | `stops.<i>.id` | reserved for `RouteLeg.fromId` / `toId` |
 | any field-level problem (bad `"HH:MM"`, latitude out of range, negative packages, unknown enum value, …) | the field path, e.g. `stops.3.timeWindow.start` | shape mirrors `src/lib/types.ts` |
+| a **time window whose `end` is before its `start`** | `stops.<i>.timeWindow.end` | it can never be met (`end === start` is allowed: a point-in-time window) |
+| **out-of-range numbers**: `avgSpeedKmh` outside 1–200, `serviceMinutes` > 1440, `packages` > 10 000, `capacityPackages` > 1 000 000, a `color` that is not a hex colour | the field path | schema-valid input must not be able to produce `NaN:NaN` ETAs or `totalMinutes: 1e308` |
 
-Unknown keys are stripped rather than rejected. Malformed JSON → `400 { error: "Request body must be valid JSON", issues: [] }`; an exception thrown by the optimizer → `500`. If your solver needs different limits, change `MAX_STOPS` / `MAX_DRIVERS` in `src/app/api/optimize/route.ts` (and mind the ~2 s budget in [§5](#5-performance-budget)).
+Unknown keys are stripped rather than rejected. Malformed JSON → `400 { error: "Request body must be valid JSON", issues: [] }`; an exception thrown by the optimizer → `500`. If your solver needs different limits, change `MAX_STOPS` / `MAX_DRIVERS` (and the numeric bounds next to them) in `src/app/api/optimize/route.ts` (and mind the ~2 s budget in [§5](#5-performance-budget)).
 
 ---
 
@@ -320,7 +322,7 @@ The UI and store rely on these; the test-suite in `tests/optimizer.test.ts` chec
 1. **Every stop appears exactly once** – either in exactly one `routes[i].stopIds` or in `unassignedStopIds`. Never dropped, never duplicated.
 2. **`routes` has one entry per driver, in `drivers` order**, including empty routes (`stopIds: []`, `legs: []`, totals `0`, `etaByStopId: {}`).
 3. **Legs form a closed depot chain**: `legs[0].fromId === "DEPOT"`, `legs[k].toId === legs[k+1].fromId`, the middle ids equal `stopIds` in order, and the last leg ends at `"DEPOT"`. `legs.length === stopIds.length + 1` (or `0`).
-4. **`etaByStopId` has an `"HH:MM"` entry for every id in `stopIds`**, non-decreasing along the route.
+4. **`etaByStopId` has an `"HH:MM"` entry for every id in `stopIds`**, non-decreasing along the route — so past midnight keep counting (`"24:05"`, `"25:13"`) instead of wrapping to `"00:05"`. The store rejects a response whose ETAs are not `H:MM`/`HH:MM` strings and falls back to the local optimizer.
 5. **Time-window semantics**: early arrival = wait (ETA clamped to `start`, not a violation); ETA strictly after `end` = violation. `metrics.timeWindowViolations` counts those.
 6. **Metrics are consistent with routes**: `totalDistanceKm ≈ Σ route.totalDistanceKm` (±0.05), `totalMinutes = Σ route.totalMinutes`, `stopsPerDriver` has every driver id, `longestRouteMinutes = max`. Easiest: call `computeMetrics(routes, stops)`.
 7. **Capacity**: `Σ packages` on a route ≤ `driver.capacityPackages`. Stops that cannot fit go to `unassignedStopIds`.
@@ -335,7 +337,7 @@ The UI and store rely on these; the test-suite in `tests/optimizer.test.ts` chec
 
 `/api/optimize` runs as a Vercel serverless function (`runtime = 'nodejs'`). Budget the whole request at **≤ 2 s** including cold start so the “Optimize” button feels instant; the store shows a spinner and then a toast with `computeMs`. Guidelines:
 
-- The placeholder solves 45 stops / 3 drivers in a few tens of milliseconds (~25–90 ms measured; the idle-repair pass is the expensive part, plain NN + 2-opt is ~3 ms). Anything under ~500 ms of solve time is invisible to the user.
+- The placeholder solves 45 stops / 3 drivers in a few tens of milliseconds (~25–90 ms measured; the idle-repair pass is the expensive part, plain NN + 2-opt is ~3 ms). Anything under ~500 ms of solve time is invisible to the user. At the request caps the placeholder stays bounded by construction: the time-window repair stage shares a **1.5 s wall-clock budget** per request (`REPAIR_TIME_BUDGET_MS`) and skips routes longer than 300 (late pass) / 120 (idle pass) stops, and the route handler declares `maxDuration = 30` as a backstop — a 1000-stop request returns in a few seconds with whatever repair fit in the budget.
 - If a metaheuristic needs a time limit, cap it around 1 s and return the best-so-far solution – never block for the full function timeout.
 - For Python (Option B): budget cold start of the runtime + import time of your solver. Keep the wheel small, import lazily inside `solve()`, and consider `maxDuration` in `vercel.json` only as a safety net, not a target.
 - The client falls back to the in-browser TypeScript `optimize()` when the API call fails, so a timeout degrades gracefully but silently swaps algorithms – watch `algorithm` in the toast during testing.

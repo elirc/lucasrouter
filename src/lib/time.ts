@@ -1,20 +1,36 @@
 // "HH:MM" helpers. All math is done in minutes-since-midnight.
+//
+// Times are "HH:MM" on the clock of the day the shift started. Like GTFS, an
+// hour may run past 23 ("25:13" = 01:13 the next day) so that ETAs stay
+// monotonic and comparable to a same-day time window when a route crosses
+// midnight; `to12h` renders such times as "1:13 AM +1". Inputs (windows,
+// shift starts) are validated to 00:00-23:59 by the API schema.
 
-/** Parse "HH:MM" (24h) into minutes since midnight. Throws on malformed input. */
+/** Largest hour `parseHHMM` accepts (a few days out, plenty for any route). */
+const MAX_HOUR = 99;
+
+/**
+ * Parse "HH:MM" into minutes since midnight of the shift day. Hours may exceed
+ * 23 for times past midnight (see the file header). Throws on malformed input.
+ */
 export function parseHHMM(hhmm: string): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
   if (!m) throw new Error(`Invalid HH:MM time: "${hhmm}"`);
   const h = Number(m[1]);
   const min = Number(m[2]);
-  if (h < 0 || h > 23 || min < 0 || min > 59) {
+  if (h < 0 || h > MAX_HOUR || min < 0 || min > 59) {
     throw new Error(`Invalid HH:MM time: "${hhmm}"`);
   }
   return h * 60 + min;
 }
 
-/** Format minutes since midnight as zero-padded "HH:MM". Wraps past midnight. */
+/**
+ * Format minutes since midnight as zero-padded "HH:MM". Does NOT wrap past
+ * midnight: 1513 -> "25:13", so a schedule that runs into the next day keeps
+ * increasing ETAs (negative input clamps to "00:00").
+ */
 export function formatHHMM(minutes: number): string {
-  const total = ((Math.round(minutes) % 1440) + 1440) % 1440;
+  const total = Math.max(0, Math.round(minutes));
   const h = Math.floor(total / 60);
   const m = total % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
@@ -35,14 +51,26 @@ export function formatDuration(minutes: number): string {
   return `${h}h ${m}m`;
 }
 
-/** Format an "HH:MM" 24h time as "9:05 AM" for display. */
+/**
+ * Format an "HH:MM" 24h time as "9:05 AM" for display; times past midnight
+ * (hour >= 24) get a day suffix: "25:13" -> "1:13 AM +1". Tolerant: anything
+ * `parseHHMM` rejects is returned unchanged rather than thrown, so a malformed
+ * ETA from a swapped-in optimizer degrades to raw text instead of a blank
+ * screen.
+ */
 export function to12h(hhmm: string): string {
-  const mins = parseHHMM(hhmm);
-  const h24 = Math.floor(mins / 60);
+  let mins: number;
+  try {
+    mins = parseHHMM(hhmm);
+  } catch {
+    return hhmm;
+  }
+  const days = Math.floor(mins / 1440);
+  const h24 = Math.floor((mins % 1440) / 60);
   const m = mins % 60;
   const suffix = h24 >= 12 ? 'PM' : 'AM';
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  return `${h12}:${String(m).padStart(2, '0')} ${suffix}`;
+  return `${h12}:${String(m).padStart(2, '0')} ${suffix}${days > 0 ? ` +${days}` : ''}`;
 }
 
 /** Format a time window compactly, e.g. "9:00–11:00 AM" / "1:00–3:00 PM". */

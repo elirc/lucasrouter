@@ -332,6 +332,7 @@ export function MoveStopMenu({
         onClick={() => (open ? close(false) : openMenu())}
         disabled={disabled}
         aria-label={`${isAssigned ? 'Move' : 'Assign'} ${address}`}
+        title={stop.status !== 'pending' ? `${stop.status === 'delivered' ? 'Delivered' : 'Failed'} stops stay with their driver` : undefined}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
@@ -357,7 +358,13 @@ export function MoveStopMenu({
             style={menuStyle}
             className="fixed z-50 rounded-xl border border-slate-200 bg-white py-1 text-sm text-slate-900 shadow-lg ring-1 ring-black/5"
           >
-            <p className="truncate px-3 pt-1 pb-1.5 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+            {/* Visual header only: the menu is already labelled with the
+                address via aria-label, and role="menu" may only own menuitems. */}
+            <p
+              role="presentation"
+              aria-hidden="true"
+              className="truncate px-3 pt-1 pb-1.5 text-[11px] font-semibold tracking-wide text-slate-500 uppercase"
+            >
               {address}
             </p>
             {ownRouteItems.map((item) => (
