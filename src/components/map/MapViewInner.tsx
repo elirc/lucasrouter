@@ -7,10 +7,11 @@
 import 'leaflet/dist/leaflet.css';
 import './map.css';
 
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, Marker, TileLayer, ZoomControl, AttributionControl } from 'react-leaflet';
 import type { Driver, Route, Stop } from '@/lib/types';
-import { MADISON_CENTER, type LatLng, type LatLngTuple } from '@/lib/geo';
+import { MADISON_CENTER, boundsOf, type LatLng, type LatLngTuple } from '@/lib/geo';
+import { latLngBounds, type FitBoundsOptions, type LatLngBounds } from 'leaflet';
 import { cn } from '@/lib/cn';
 import type { MapViewProps } from './MapView';
 import { setupLeaflet } from './leafletSetup';
@@ -186,11 +187,34 @@ function MapViewInner({
   const handleSelectStop = useStableCallback(onSelectStop);
   const handleReassign = useStableCallback(onReassign);
 
+  // Initial viewport, computed ONCE at mount (MapContainer ignores later prop
+  // changes; FitBounds/FocusFit own subsequent framing). Creating the map
+  // directly on the final bounds avoids requesting a throw-away set of tiles at
+  // the default zoom before the first fitBounds — that wasted round-trip was
+  // delaying the first painted tile (the page's LCP element) on slow networks.
+  const [initialView] = useState<
+    { bounds: LatLngBounds; boundsOptions: FitBoundsOptions } | { center: LatLngTuple; zoom: number }
+  >(() => {
+    const pad = fitPadding ?? [32, 32];
+    const paddingOpts: FitBoundsOptions = Array.isArray(pad)
+      ? { padding: pad }
+      : { paddingTopLeft: pad.topLeft, paddingBottomRight: pad.bottomRight };
+    if (focusActive && focusFrom && focusTo) {
+      return { bounds: latLngBounds(focusFrom, focusTo), boundsOptions: { padding: [48, 48], maxZoom: 15 } };
+    }
+    const b = boundsOf(fitPoints);
+    if (b && !focusActive) {
+      return { bounds: latLngBounds(b[0], b[1]), boundsOptions: { ...paddingOpts, maxZoom: 15 } };
+    }
+    return { center: MADISON_CENTER, zoom: 12 };
+  });
+
   return (
     <div className={cn('relative z-0 isolate overflow-hidden h-full w-full', className)}>
       <MapContainer
-        center={MADISON_CENTER}
-        zoom={12}
+        {...('bounds' in initialView
+          ? { bounds: initialView.bounds, boundsOptions: initialView.boundsOptions }
+          : { center: initialView.center, zoom: initialView.zoom })}
         // Fractional zoom lets fitBounds frame all 45 stops tightly on a 375px
         // phone (integer snapping would fall back to a whole level further out).
         zoomSnap={0.25}

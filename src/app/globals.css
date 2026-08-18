@@ -38,6 +38,12 @@
   }
 }
 
+:root {
+  /* Exposed so JS can read the safe-area inset via getComputedStyle without
+     mutating the DOM (see useSafeAreaInsetBottom in BottomSheet.tsx). */
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 html,
 body {
   height: 100%;
@@ -54,4 +60,17 @@ body {
  */
 .leaflet-container {
   font-family: inherit;
+}
+
+/* Map loading placeholder: gentle opacity pulse (respects reduced motion). */
+.riq-map-placeholder {
+  opacity: 0.85;
+  animation: riq-map-pulse 1.8s ease-in-out infinite;
+}
+@keyframes riq-map-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .riq-map-placeholder { animation: none; }
 }

@@ -52,6 +52,7 @@ pnpm build        # production build — gates TypeScript (ESLint is gated by `p
 pnpm start        # serve the production build
 pnpm smoke [url]  # headless end-to-end smoke run against a running server (see below)
 pnpm generate-icons     # regenerate public/icons/*.png (dependency-free)
+pnpm generate-map-placeholder  # regenerate public/map-placeholder.{svg,webp} (needs a local Chrome/Edge for the WebP)
 pnpm precompute-paths   # (optional, one-off) refresh src/data/paths.json from the OSRM demo server
 ```
 
@@ -114,6 +115,7 @@ scripts/
   smoke-e2e.mjs               puppeteer-core end-to-end smoke run (`pnpm smoke`)
   precompute-paths.ts         one-off OSRM fetch → src/data/paths.json (never called at runtime)
   generate-icons.mjs          dependency-free PNG icon generator (any + maskable variants)
+  generate-map-placeholder.mjs  map-shaped loading placeholder (SVG → 6 KB WebP via local Chrome)
 tests/                        vitest (optimizer, store, api-optimize, paths, time)
 docs/
   ALGORITHM_INTEGRATION.md    contract, limits, example, Python skeleton
@@ -132,6 +134,18 @@ DECISIONS.md                  every assumption made where the spec was silent
 6. `baseline()` — round-robin in file order, unsequenced, same distance model — provides the "before" numbers.
 
 On the seed data: **355 km → 175 km (−51 %)**, 20 h 24 m → 17 h 31 m of total route time (−14 %), longest route 9 h 25 m → 6 h 33 m, 6 → 0 time-window violations, in a few tens of milliseconds (~25–90 ms; the idle-repair pass is the cost).
+
+## Performance & accessibility
+
+Lighthouse 12 (mobile preset) against `pnpm build && pnpm start` on the dev laptop that built this — a machine Lighthouse flags as slower than its 4× CPU throttle assumes, so treat the performance numbers as a floor (medians of 3 runs; calibrated = `--throttling.cpuSlowdownMultiplier=2` per Lighthouse's calibration guidance):
+
+| Page | Performance | calibrated | Accessibility | Best practices | SEO |
+| --- | --- | --- | --- | --- | --- |
+| `/` | 89 | 98 | 100 | 100 | 100 |
+| `/driver/D1` | 67 | 79 | 100 | 100 | 100 |
+| `/dispatch` | 54 | 71 | 96 | 96 | 100 |
+
+What keeps `/dispatch` fast: the Leaflet chunk is preloaded in parallel with hydration, the map is created directly on its final bounds, the 45 markers stream in as a low-priority transition after the tiles, a 6 KB map-shaped placeholder is in the server HTML (`fetchpriority=high`), no `Intl` calls or forced reflows on the boot path. Details and the honest caveats are in [`DECISIONS.md`](DECISIONS.md) (#42–44). Installable as a PWA (manifest with `any` + `maskable` icons, service worker registered in production).
 
 ## Notes
 

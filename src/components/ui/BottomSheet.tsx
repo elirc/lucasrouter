@@ -65,13 +65,12 @@ export function useSafeAreaInsetBottom(): number {
   const [inset, setInset] = useState(0);
   useEffect(() => {
     const measure = () => {
-      const probe = document.createElement('div');
-      probe.style.cssText =
-        'position:fixed;left:0;bottom:0;width:0;height:0;visibility:hidden;pointer-events:none;' +
-        'padding-bottom:env(safe-area-inset-bottom, 0px)';
-      document.body.appendChild(probe);
-      const px = parseFloat(getComputedStyle(probe).paddingBottom) || 0;
-      probe.remove();
+      // `--safe-area-bottom` is defined on :root in globals.css as
+      // `env(safe-area-inset-bottom, 0px)`; reading it back through
+      // getComputedStyle needs no DOM mutation (appending a probe element would
+      // dirty layout and force a second full reflow in the same frame).
+      const raw = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-bottom');
+      const px = parseFloat(raw) || 0;
       setInset((prev) => (Math.abs(prev - px) < 0.5 ? prev : px));
     };
     // First reading inside a frame so it shares the frame's layout instead of

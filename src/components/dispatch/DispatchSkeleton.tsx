@@ -1,5 +1,6 @@
 import { Skeleton } from '@/components/ui';
 
+import { MapSkeleton } from '@/components/map';
 import { DispatchTopBar } from './DispatchTopBar';
 
 /** Placeholder rows that mimic the driver cards. */
@@ -42,7 +43,8 @@ export function DispatchSkeleton() {
       <DispatchTopBar />
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* Map placeholder */}
-        <div className="relative min-h-0 flex-1 animate-pulse bg-slate-200" aria-hidden="true">
+        <div className="relative min-h-0 flex-1 bg-slate-200" aria-hidden="true">
+          <MapSkeleton />
           {/* Mobile sheet placeholder */}
           <div className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-slate-200 bg-white px-4 pt-3 pb-safe shadow-[0_-8px_30px_rgba(0,0,0,0.12)] md:hidden">
             <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300" />

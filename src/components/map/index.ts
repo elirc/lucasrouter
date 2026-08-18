@@ -8,7 +8,7 @@
 // client-only Leaflet tree, import them from './StopMarker', './DepotMarker'
 // or './RoutePolyline' directly.
 
-export { default as MapView } from './MapView';
+export { default as MapView, MapSkeleton } from './MapView';
 export type { MapViewProps, FitPadding, MapViewportInset } from './MapView';
 
 export { StopMarker, DepotMarker, RoutePolyline, RoutePolylines } from './layers';

@@ -13,7 +13,8 @@
     "verify": "pnpm typecheck && pnpm lint && pnpm test",
     "smoke": "node scripts/smoke-e2e.mjs",
     "generate-icons": "node scripts/generate-icons.mjs",
-    "precompute-paths": "tsx scripts/precompute-paths.ts"
+    "precompute-paths": "tsx scripts/precompute-paths.ts",
+    "generate-map-placeholder": "node scripts/generate-map-placeholder.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
