@@ -1,0 +1,26 @@
+[
+  {
+    "id": "D1",
+    "name": "Maya Thompson",
+    "vehicle": "Van 12",
+    "color": "#2563eb",
+    "shiftStart": "08:00",
+    "capacityPackages": 60
+  },
+  {
+    "id": "D2",
+    "name": "Luis Ortega",
+    "vehicle": "Van 07",
+    "color": "#f97316",
+    "shiftStart": "08:00",
+    "capacityPackages": 60
+  },
+  {
+    "id": "D3",
+    "name": "Priya Nair",
+    "vehicle": "Van 21",
+    "color": "#16a34a",
+    "shiftStart": "08:00",
+    "capacityPackages": 60
+  }
+]
