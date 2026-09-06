@@ -62,10 +62,10 @@ export function DriverPicker() {
         </div>
       </header>
 
-      <main className="flex flex-1 flex-col px-4 pt-6 pb-8">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Who&apos;s driving?</h1>
+      <main className="flex flex-1 flex-col px-5 pt-8 pb-8">
+        <div className="driver-welcome"><span>READY FOR THE ROAD</span><h1>Who&apos;s driving?</h1><p>Your next great delivery day starts here.</p></div>
         <p className="mt-1 text-sm text-slate-600">
-          Pick your name to open today&apos;s route. Your choice is remembered on this phone.
+          Choose your profile to open today&apos;s stops. We’ll remember you on this phone.
         </p>
 
         {ready ? (

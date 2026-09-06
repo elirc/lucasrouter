@@ -1,5 +1,7 @@
 'use client';
 
+import './dispatch.css';
+
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { MapView, type FitPadding, type MapViewportInset } from '@/components/map';
@@ -9,6 +11,7 @@ import { shortAddress } from '@/lib/geo';
 import { useAppStore, useHasHydrated } from '@/store/useAppStore';
 
 import { DispatchPanel } from './DispatchPanel';
+import { DispatchOverview } from './DispatchOverview';
 import { DispatchSkeleton } from './DispatchSkeleton';
 import { DispatchTopBar } from './DispatchTopBar';
 import { LegendOverlay } from './LegendOverlay';
@@ -162,8 +165,9 @@ export function DispatchScreen() {
   if (!hydrated || !depot) return <DispatchSkeleton />;
 
   return (
-    <div className="flex h-dvh flex-col bg-slate-100">
+    <div className="dispatch-shell flex h-dvh flex-col">
       <DispatchTopBar />
+      <DispatchOverview />
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* Map (+ legend overlay as a sibling above the isolated map wrapper) —
@@ -187,6 +191,7 @@ export function DispatchScreen() {
             attributionPosition={isDesktop ? 'bottomright' : 'topright'}
             className="h-full w-full"
           />
+          <div className="dispatch-map-label"><strong>Madison delivery area</strong><span>{stops.length} stops · Select a marker to view details</span></div>
           {routes && (
             <LegendOverlay
               drivers={drivers}
@@ -203,9 +208,9 @@ export function DispatchScreen() {
             aria-label="Dispatch panel"
             // Proportional width so the map keeps ~60% across the md range
             // (340px floor at 768px, 460px cap from ~1150px). Mirrors DispatchSkeleton.
-            className="flex w-[clamp(340px,40vw,460px)] shrink-0 flex-col border-l border-slate-200 bg-slate-100"
+            className="dispatch-panel flex w-[clamp(340px,34vw,440px)] shrink-0 flex-col border-l border-slate-200"
           >
-            <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+            <div className="dispatch-panel-heading shrink-0">
               <PanelHeader />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">

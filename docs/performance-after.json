@@ -1,0 +1,98 @@
+[
+  {
+    "route": "/",
+    "run": 0,
+    "fcpMs": 2236,
+    "blockingMs": 161,
+    "jsBytes": 608605,
+    "htmlBytes": 33679
+  },
+  {
+    "route": "/",
+    "run": 1,
+    "fcpMs": 440,
+    "blockingMs": 130,
+    "jsBytes": 608605,
+    "htmlBytes": 33679
+  },
+  {
+    "route": "/",
+    "run": 2,
+    "fcpMs": 472,
+    "blockingMs": 154,
+    "jsBytes": 608605,
+    "htmlBytes": 33679
+  },
+  {
+    "route": "/driver",
+    "run": 0,
+    "fcpMs": 284,
+    "blockingMs": 187,
+    "jsBytes": 675458,
+    "htmlBytes": 13143
+  },
+  {
+    "route": "/driver",
+    "run": 1,
+    "fcpMs": 264,
+    "blockingMs": 206,
+    "jsBytes": 675458,
+    "htmlBytes": 13143
+  },
+  {
+    "route": "/driver",
+    "run": 2,
+    "fcpMs": 308,
+    "blockingMs": 173,
+    "jsBytes": 675458,
+    "htmlBytes": 13143
+  },
+  {
+    "route": "/dispatch",
+    "run": 0,
+    "fcpMs": 1128,
+    "blockingMs": 413,
+    "jsBytes": 801839,
+    "htmlBytes": 17646
+  },
+  {
+    "route": "/dispatch",
+    "run": 1,
+    "fcpMs": 244,
+    "blockingMs": 332,
+    "jsBytes": 801839,
+    "htmlBytes": 17646
+  },
+  {
+    "route": "/dispatch",
+    "run": 2,
+    "fcpMs": 260,
+    "blockingMs": 454,
+    "jsBytes": 801839,
+    "htmlBytes": 17646
+  },
+  {
+    "route": "/driver/D1",
+    "run": 0,
+    "fcpMs": 1264,
+    "blockingMs": 181,
+    "jsBytes": 904055,
+    "htmlBytes": 13868
+  },
+  {
+    "route": "/driver/D1",
+    "run": 1,
+    "fcpMs": 300,
+    "blockingMs": 204,
+    "jsBytes": 904055,
+    "htmlBytes": 13868
+  },
+  {
+    "route": "/driver/D1",
+    "run": 2,
+    "fcpMs": 192,
+    "blockingMs": 199,
+    "jsBytes": 904055,
+    "htmlBytes": 13868
+  }
+]

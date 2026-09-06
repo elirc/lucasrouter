@@ -1,7 +1,7 @@
 'use client';
 
 import { Wand2 } from 'lucide-react';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 import { DriverCard } from '@/components/ui';
 import { shortAddress } from '@/lib/geo';
@@ -21,12 +21,10 @@ import { StopListItem } from './StopListItem';
  *
  * Not `React.lazy` + `Suspense`: that swap unmounts the fallback subtree, so a
  * ⋯ button focused before the chunk landed loses focus to <body>. Instead the
- * module is tracked in a tiny external store, the import is kicked off at
- * module evaluation on desktop (in parallel with hydration, like MapView does
- * for Leaflet), and the one focused control is re-focused across the swap.
+ * module is tracked in a tiny external store and requested once desktop
+ * routes exist. The focused control is re-focused across the swap.
  */
 type DndModule = typeof import('./DriverRoutesDnd');
-const DESKTOP_QUERY = '(min-width: 768px)';
 let dndModule: DndModule | null = null;
 let dndLoad: Promise<void> | null = null;
 const dndListeners = new Set<() => void>();
@@ -43,7 +41,6 @@ function loadDnd(): Promise<void> {
   );
   return dndLoad;
 }
-if (typeof window !== 'undefined' && window.matchMedia(DESKTOP_QUERY).matches) void loadDnd();
 const subscribeDnd = (l: () => void) => {
   dndListeners.add(l);
   return () => {
@@ -57,7 +54,7 @@ function useDndModule(wanted: boolean): DndModule | null {
     () => dndModule,
     () => null,
   );
-  if (wanted && !mod && typeof window !== 'undefined') void loadDnd();
+  useEffect(() => { if (wanted && !mod) void loadDnd(); }, [wanted, mod]);
   return wanted ? mod : null;
 }
 
@@ -75,7 +72,7 @@ function describeFocus(): { stopId: string | null; label: string } | null {
 }
 
 export interface DriverRoutesProps {
-  /** Desktop enables drag & drop and expands every card by default. */
+  /** Desktop enables drag & drop. */
   isDesktop: boolean;
   /** Row body click (the screen selects the stop and, on mobile, shrinks the sheet). */
   onActivateStop: (stopId: string) => void;
@@ -123,11 +120,11 @@ export function DriverRoutes({ isDesktop, onActivateStop }: DriverRoutesProps) {
   }, [routes]);
 
   // ---- expand / collapse -----------------------------------------------------------
-  // `null` entries fall back to the default (desktop: all open, mobile: first open).
+  // Only the first route starts expanded, keeping the initial list lightweight.
   const [explicitExpanded, setExplicitExpanded] = useState<Record<string, boolean>>({});
   const isExpanded = useCallback(
-    (driverId: string, i: number) => explicitExpanded[driverId] ?? (isDesktop || i === 0),
-    [explicitExpanded, isDesktop],
+    (driverId: string, i: number) => explicitExpanded[driverId] ?? i === 0,
+    [explicitExpanded],
   );
 
   // When the map selects a stop whose card is collapsed, open that card so the
@@ -174,7 +171,7 @@ export function DriverRoutes({ isDesktop, onActivateStop }: DriverRoutesProps) {
   // ---- render ---------------------------------------------------------------------------
   // Same-width spacer where the drag handle will appear (44px + the handle's
   // -4px margin), so the rows do not shift when dnd-kit lands.
-  const dnd = useDndModule(isDesktop);
+  const dnd = useDndModule(isDesktop && routes !== null);
   const handlePlaceholder = isDesktop && !dnd ? <span aria-hidden="true" className="-ml-1 size-11 shrink-0" /> : undefined;
 
   // Re-focus the control the user was on across the fallback → dnd swap. The

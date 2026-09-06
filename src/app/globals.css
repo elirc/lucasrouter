@@ -1,11 +1,10 @@
 @import "tailwindcss";
 
 /*
- * Theme: Inter is loaded via next/font in src/app/layout.tsx and exposed as
- * the CSS variable --font-inter; map it to Tailwind's `font-sans`.
+ * System typography is immediately available, with no font request on startup.
  */
 @theme inline {
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 
   /* Toast enter animation (used as `animate-toast-in`). */
   --animate-toast-in: toast-in 200ms ease-out;
@@ -39,6 +38,7 @@
 }
 
 :root {
+  color-scheme: light;
   /* Exposed so JS can read the safe-area inset via getComputedStyle without
      mutating the DOM (see useSafeAreaInsetBottom in BottomSheet.tsx). */
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -51,6 +51,13 @@ body {
 
 body {
   @apply bg-slate-100 text-slate-900 antialiased;
+}
+
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled), [role="button"] { cursor: pointer; }
+::selection { background: #c8e6d4; color: #143e2e; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 
 /*

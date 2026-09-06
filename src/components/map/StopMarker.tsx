@@ -2,7 +2,7 @@
 
 // A single delivery stop on the map: memoised divIcon marker + rich popup.
 
-import { memo, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Marker, Popup, useMap } from 'react-leaflet';
 import type { LeafletEventHandlerFnMap, Marker as LeafletMarker, Popup as LeafletPopup } from 'leaflet';
 import type { Driver, Priority, Stop, StopStatus } from '@/lib/types';
@@ -82,6 +82,7 @@ function StopMarkerImpl({
   insetTop = 0,
 }: StopMarkerProps) {
   const map = useMap();
+  const [popupOpen, setPopupOpen] = useState(false);
   const markerRef = useRef<LeafletMarker | null>(null);
   const popupRef = useRef<LeafletPopup | null>(null);
   // Latest insets for the selection effect (which must only re-run on
@@ -111,8 +112,9 @@ function StopMarkerImpl({
   // externally-driven switch A → B does not bounce the selection to null.
   const eventHandlers = useMemo<LeafletEventHandlerFnMap>(
     () => ({
-      click: () => onSelectStop?.(stop.id),
+      click: () => { setPopupOpen(true); onSelectStop?.(stop.id); },
       popupclose: () => {
+        setPopupOpen(false);
         if (selected) onSelectStop?.(null);
       },
     }),
@@ -131,7 +133,7 @@ function StopMarkerImpl({
   useEffect(() => {
     const marker = markerRef.current;
     if (!marker) return;
-    if (!selected) {
+    if (!selected && !popupOpen) {
       if (marker.isPopupOpen()) marker.closePopup();
       return;
     }
@@ -151,7 +153,7 @@ function StopMarkerImpl({
       map.panBy([point.x - target.x, point.y - target.y], { animate: false });
     }
     if (!marker.isPopupOpen()) marker.openPopup();
-  }, [selected, map]);
+  }, [selected, popupOpen, map]);
 
   const handleReassign = (e: ChangeEvent<HTMLSelectElement>) => {
     const next = e.target.value;
@@ -172,7 +174,7 @@ function StopMarkerImpl({
       zIndexOffset={selected ? 1000 : 0}
       eventHandlers={eventHandlers}
     >
-      <Popup
+      {(selected || popupOpen) && <Popup
         ref={popupRef}
         className="riq-popup"
         maxWidth={280}
@@ -239,7 +241,7 @@ function StopMarkerImpl({
             </div>
           ) : null}
         </div>
-      </Popup>
+      </Popup>}
     </Marker>
   );
 }

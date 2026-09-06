@@ -31,7 +31,6 @@ export function PanelHeader({ className }: PanelHeaderProps) {
   const routes = useAppStore((s) => s.routes);
   const isOptimizing = useAppStore((s) => s.isOptimizing);
   const optimizeError = useAppStore((s) => s.optimizeError);
-  const algorithm = useAppStore((s) => s.algorithm);
   const lastOptimizedAt = useAppStore((s) => s.lastOptimizedAt);
   const editedSinceOptimize = useAppStore((s) => s.editedSinceOptimize);
   const optimize = useAppStore((s) => s.optimize);
@@ -52,15 +51,15 @@ export function PanelHeader({ className }: PanelHeaderProps) {
     ? 'Not yet optimized'
     : !lastOptimizedAt
       ? 'Assigned by hand · not yet optimized'
-      : `Optimized ${formatClock(lastOptimizedAt)}${algorithm ? ` · ${algorithm}` : ''}${editedSinceOptimize ? ' · edited by hand' : ''}`;
+      : `Updated ${formatClock(lastOptimizedAt)}${editedSinceOptimize ? ' · manually adjusted' : ' · routes ready'}`;
 
   return (
     <div className={cn('text-slate-900', className)}>
       <div className="flex items-baseline justify-between gap-3">
-        <h1 className="truncate text-sm font-semibold">
+        <h2 className="truncate text-sm font-semibold">
           <span className="sr-only">Dispatch · </span>
           {today}
-        </h1>
+        </h2>
         <p className="shrink-0 text-xs text-slate-500 tabular-nums">
           {totals.stops} {totals.stops === 1 ? 'stop' : 'stops'} · {totals.packages}{' '}
           {totals.packages === 1 ? 'pkg' : 'pkgs'}

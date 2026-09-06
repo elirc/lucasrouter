@@ -204,6 +204,21 @@ describe('persistence: hydration and tolerant storage', () => {
 });
 
 describe('persistence: write dedupe and cross-tab sync', () => {
+  it('does not serialize delivery photos when selecting stops or showing feedback', async () => {
+    const storage = new FakeStorage();
+    const { useAppStore } = await loadStore(makeWindow(storage));
+    await useAppStore.getState().loadSeed();
+    const stringify = vi.spyOn(JSON, 'stringify');
+    const state = useAppStore.getState();
+    for (let i = 0; i < 100; i++) state.setSelectedStop(`S${i}`);
+    state.showToast('Selected', 'info');
+    state.dismissToast();
+    expect(stringify).not.toHaveBeenCalled();
+    state.setStopStatus('S001', 'delivered');
+    expect(stringify).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(storage.getItem(KEY)!).state.stops[0].status).toBe('delivered');
+  });
+
   it('does not rewrite storage for ephemeral-only updates', async () => {
     const storage = new FakeStorage();
     storage.writeFromOtherTab(KEY, blobV1());
@@ -782,7 +797,7 @@ describe('optimize()', () => {
     expect(typeof s.computeMs).toBe('number');
     expect(s.lastOptimizedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(s.toast?.tone).toBe('success');
-    expect(s.toast?.message).toMatch(/^Optimized in \d+ ms · nn-2opt-v1$/);
+    expect(s.toast?.message).toMatch(/^Routes ready · 3 drivers · \d+ km$/);
   });
 
   it('uses the API response when it is well-formed (algorithm string passes through)', async () => {
@@ -802,7 +817,7 @@ describe('optimize()', () => {
     expect(s.algorithm).toBe('remote-solver-9');
     expect(s.computeMs).toBe(12.5);
     expect(s.routes).toEqual(local.routes);
-    expect(s.toast?.message).toBe('Optimized in 13 ms · remote-solver-9');
+    expect(s.toast?.message).toMatch(/^Routes ready · \d+ drivers · \d+ km$/);
   });
 
   it('falls back locally on a non-2xx status or an unexpected body shape', async () => {
@@ -912,8 +927,8 @@ describe('optimize()', () => {
       expect(s.optimizeError).toBeNull();
       expect(s.isOptimizing).toBe(false);
       expect(s.toast?.tone).toBe('success');
-      expect(s.baselineMetrics).toBeNull(); // no comparison, but a usable plan
-      expect(warn).toHaveBeenCalled(); // "optimizer chunk unavailable"
+      expect(s.baselineMetrics?.totalDistanceKm).toBeGreaterThan(0);
+      expect(warn).not.toHaveBeenCalled(); // the API plan no longer needs the solver chunk
     } finally {
       vi.doUnmock('@/lib/optimizer');
       vi.resetModules();
@@ -946,7 +961,7 @@ describe('optimize()', () => {
 
     // No argument = unchanged dispatcher behaviour (the demo's headline number).
     await useAppStore.getState().optimize();
-    expect(useAppStore.getState().toast?.message).toMatch(/^Optimized in \d+ ms · nn-2opt-v1$/);
+    expect(useAppStore.getState().toast?.message).toMatch(/^Routes ready · 3 drivers · \d+ km$/);
 
     // The driver's screen prepares its own plan (#45); "nn-2opt-v1" means
     // nothing on a phone.

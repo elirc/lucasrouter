@@ -7,6 +7,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { DispatchActions } from './DispatchActions';
 import { DriverRoutes } from './DriverRoutes';
 import { UnassignedSection } from './UnassignedSection';
+import { StopSearch } from './StopSearch';
 
 export interface DispatchPanelProps {
   isDesktop: boolean;
@@ -29,11 +30,13 @@ export function DispatchPanel({ isDesktop, onActivateStop, className }: Dispatch
     <div className={cn('space-y-4 text-sm', className)}>
       {optimizedMetrics && <MetricsCompare baseline={baselineMetrics} optimized={optimizedMetrics} />}
 
+      <StopSearch onActivateStop={onActivateStop}>
       <section aria-label="Driver routes">
         <DriverRoutes isDesktop={isDesktop} onActivateStop={onActivateStop} />
       </section>
 
       <UnassignedSection onActivateStop={onActivateStop} />
+      </StopSearch>
 
       <DispatchActions className="border-t border-slate-200 pt-4" />
     </div>

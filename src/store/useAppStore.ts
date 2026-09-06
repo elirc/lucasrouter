@@ -69,6 +69,7 @@ import { create } from 'zustand';
 import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware';
 
 import { getSeed } from '@/data';
+import { baseline } from '@/lib/optimizer/baseline';
 import { schedule } from '@/lib/optimizer/schedule';
 import type {
   DeliveryEvent,
@@ -387,6 +388,7 @@ function safeLocalStorage(): Storage | null {
  * blob here so applying it does not echo a write back.
  */
 let knownStored: string | null = null;
+let lastPersistedSlice: PersistedSlice | null = null;
 let warnedWriteFailure = false;
 
 /**
@@ -395,6 +397,7 @@ let warnedWriteFailure = false;
  */
 const persistStorage: PersistStorage<PersistedSlice> = {
   getItem(name): StorageValue<PersistedSlice> | null {
+    lastPersistedSlice = null;
     const ls = safeLocalStorage();
     if (!ls) return null;
     let raw: string | null;
@@ -432,16 +435,23 @@ const persistStorage: PersistStorage<PersistedSlice> = {
   },
 
   setItem(name, value): void {
+    // Most updates only select a marker or show a toast. Compare references
+    // before serializing potentially megabytes of delivery photos.
+    if (lastPersistedSlice && PERSISTED_KEYS.every((key) => Object.is(lastPersistedSlice![key], value.state[key]))) return;
     const ls = safeLocalStorage();
     if (!ls) return;
     const serialized = JSON.stringify(value);
     // Ephemeral-only update (toast, selection, ...): the persisted slice is
     // byte-identical to what storage already holds — do not touch storage, so
     // we never overwrite a newer blob written by another tab.
-    if (serialized === knownStored) return;
+    if (serialized === knownStored) {
+      lastPersistedSlice = value.state;
+      return;
+    }
     try {
       ls.setItem(name, serialized);
       knownStored = serialized;
+      lastPersistedSlice = value.state;
     } catch (err) {
       if (!warnedWriteFailure) {
         warnedWriteFailure = true;
@@ -452,6 +462,7 @@ const persistStorage: PersistStorage<PersistedSlice> = {
 
   removeItem(name): void {
     knownStored = null;
+    lastPersistedSlice = null;
     const ls = safeLocalStorage();
     if (!ls) return;
     try {
@@ -745,6 +756,7 @@ export const useAppStore = create<AppState>()(
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(req),
+              signal: AbortSignal.timeout(8000),
             });
             if (res.ok) {
               const json: unknown = await res.json();
@@ -756,31 +768,17 @@ export const useAppStore = create<AppState>()(
           } catch (err) {
             console.warn('[RouteIQ] /api/optimize unreachable; optimizing locally', err);
           }
-          // The assignment / sequencing / repair stages are only needed when
-          // the user actually optimizes (and the API is down), so they are
-          // loaded on demand instead of riding along in every page's boot
-          // chunk; `schedule()` above is the only piece needed synchronously
-          // (manual moves). The load is allowed to FAIL on its own (a stale
-          // deploy's hashed chunk is gone, the device is offline): it must not
-          // throw away a plan the API already returned — that would turn a
-          // missing "before" comparison into "Optimization failed".
-          let optimizer: typeof import('@/lib/optimizer') | null = null;
-          try {
-            optimizer = await import('@/lib/optimizer');
-          } catch (err) {
-            console.warn('[RouteIQ] optimizer chunk unavailable', err);
-          }
+          // Download the local solver only when the API cannot supply a plan.
+          // A successful response does not need an extra chunk round trip.
           if (!result) {
-            // Nothing from the API and no local optimizer: there is no plan to
-            // be had, and the catch below turns this into the error state.
-            if (!optimizer) throw new Error('Optimizer unavailable offline');
+            const optimizer = await import('@/lib/optimizer').catch(() => {
+              throw new Error('Optimizer unavailable offline');
+            });
             result = optimizer.optimize(req);
           }
 
-          // Baseline ("before") is always computed locally — it is cheap — but
-          // it is a comparison, not the plan: without the chunk the plan still
-          // ships and the dispatcher simply sees no "before" numbers.
-          const base = optimizer ? optimizer.baseline(req) : null;
+          // The inexpensive baseline shares the scheduler used by manual moves.
+          const base = baseline(req);
 
           set({
             routes: result.routes,
@@ -794,7 +792,7 @@ export const useAppStore = create<AppState>()(
             optimizeError: null,
           });
           if (toastStyle === 'dispatch') {
-            get().showToast(`Optimized in ${Math.round(result.computeMs)} ms · ${result.algorithm}`, 'success');
+            get().showToast(`Routes ready · ${result.routes.length} drivers · ${Math.round(result.metrics.totalDistanceKm)} km`, 'success');
           } else if (toastStyle === 'driver') {
             get().showToast('Your route is ready', 'success');
           }

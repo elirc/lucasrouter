@@ -39,9 +39,14 @@
   }
 }
 
-.driver-fade-in {
-  animation: driver-fade-in 220ms ease-out both;
-}
+.driver-frame { background: #f5f8f2; }
+.driver-frame>header { border-color: #dce5d9; }
+.driver-welcome { background: #214f40; color: #fff; border-radius: 16px; padding: 26px 22px; margin-bottom: 18px; }
+.driver-welcome>span { color: #c4dcbe; font-size: 9px; font-weight: 650; letter-spacing: 1.8px; }
+.driver-welcome h1 { font-size: 30px; line-height: 1.2; font-weight: 600; letter-spacing: -.8px; margin-top: 15px; }
+.driver-welcome p { color: #d6e5d0; font-size: 12px; margin-top: 9px; }
+/* Keep the next delivery immediately visible when a stop advances. */
+.driver-fade-in { animation: none; }
 
 .driver-sheet-in {
   animation: driver-sheet-in 200ms cubic-bezier(0.32, 0.72, 0, 1) both;

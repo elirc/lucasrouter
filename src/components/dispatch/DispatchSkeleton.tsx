@@ -41,6 +41,10 @@ export function DispatchSkeleton() {
     <div className="flex h-dvh flex-col bg-slate-100" role="status" aria-busy="true" aria-live="polite">
       <span className="sr-only">Loading dispatcher…</span>
       <DispatchTopBar />
+      <div className="dispatch-overview" aria-hidden="true">
+        <div className="overview-heading"><div><p>OPERATIONS / MADISON</p><h1>Dispatch workspace</h1></div><span className="workspace-badge"><span /> Demo workspace</span></div>
+        <div className="overview-grid">{['Delivery stops', 'Fleet available', 'Delivered', 'Planned distance'].map(label => <div className="overview-card" key={label}><div><p>{label}</p><strong>—</strong><span>Loading your workspace</span></div></div>)}</div>
+      </div>
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* Map placeholder */}
         <div className="relative min-h-0 flex-1 bg-slate-200" aria-hidden="true">
@@ -60,7 +64,7 @@ export function DispatchSkeleton() {
         </div>
         {/* Desktop side panel placeholder (same clamped width as DispatchScreen's aside) */}
         <aside
-          className="hidden w-[clamp(340px,40vw,460px)] shrink-0 border-l border-slate-200 bg-slate-100 p-4 md:block"
+          className="hidden w-[clamp(340px,34vw,440px)] shrink-0 border-l border-slate-200 bg-slate-100 p-4 md:block"
           aria-hidden="true"
         >
           <PanelSkeletonContent />

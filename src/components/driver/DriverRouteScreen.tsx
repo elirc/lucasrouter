@@ -4,6 +4,7 @@ import './driver.css';
 
 import { Inbox, Loader2, RotateCcw, UserX } from 'lucide-react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { MapSkeleton } from '@/components/map';
@@ -14,18 +15,18 @@ import { to12h } from '@/lib/time';
 import type { FailureReason, Stop } from '@/lib/types';
 import { driverProgress, useAppStore, useHasHydrated, type DeliveryProofInput } from '@/store/useAppStore';
 
-import { ActivityLogSheet } from './ActivityLogSheet';
-import { DeliverySheet } from './DeliverySheet';
 import { DriverFrame } from './DriverFrame';
 import { DriverHeader, DriverPlainHeader } from './DriverHeader';
 import { DriverMap } from './DriverMap';
 import { DriverStopList } from './DriverStopList';
-import { FailReasonSheet } from './FailReasonSheet';
 import { NavigateLink } from './NavigateLink';
 import { NextStopCard } from './NextStopCard';
 import { buildEventsJson, buildRouteReportCsv, eventsForDriver, summarizeDay } from './report';
 import { RouteCompleteCard } from './RouteCompleteCard';
-import { StopDetailsSheet } from './StopDetailsSheet';
+const ActivityLogSheet = dynamic(() => import('./ActivityLogSheet').then(m => m.ActivityLogSheet));
+const DeliverySheet = dynamic(() => import('./DeliverySheet').then(m => m.DeliverySheet));
+const FailReasonSheet = dynamic(() => import('./FailReasonSheet').then(m => m.FailReasonSheet));
+const StopDetailsSheet = dynamic(() => import('./StopDetailsSheet').then(m => m.StopDetailsSheet));
 
 export interface DriverRouteScreenProps {
   driverId: string;
@@ -473,21 +474,21 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
         )}
       </div>
 
-      <DeliverySheet
+      {deliverStop && <DeliverySheet
         open={deliverStop !== null}
         stop={deliverStop}
         onConfirm={confirmDelivery}
         onClose={cancelSheet}
-      />
-      <FailReasonSheet
+      />}
+      {failStop && <FailReasonSheet
         open={failStop !== null}
         stop={failStop}
         onPick={(reason, note) => {
           if (failStopId) markFailed(failStopId, reason, note);
         }}
         onClose={cancelSheet}
-      />
-      <StopDetailsSheet
+      />}
+      {detailsStop && <StopDetailsSheet
         stop={detailsStop}
         position={detailsIndex >= 0 ? detailsIndex + 1 : undefined}
         eta={detailsStopId ? route.etaByStopId[detailsStopId] : undefined}
@@ -496,13 +497,13 @@ export function DriverRouteScreen({ driverId }: DriverRouteScreenProps) {
         onFailed={openFailSheet}
         onUndo={markPending}
         onSkip={canSkip ? skipStop : undefined}
-      />
-      <ActivityLogSheet
+      />}
+      {logOpen && <ActivityLogSheet
         open={logOpen}
         events={events}
         stopsById={stopsById}
         onClose={() => setLogOpen(false)}
-      />
+      />}
 
       {/* Rendered here (not in the root layout) and lifted above the bottom bar. */}
       <Toast bottomOffset={BOTTOM_BAR_TOAST_OFFSET} />

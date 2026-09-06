@@ -1,5 +1,7 @@
 # RouteIQ — Delivery Route Optimizer Demo
 
+The workspace has been refreshed with a new landing page, fleet overview, searchable stops, delivery-status filters, and a coordinated driver experience. Startup now defers road geometry, drag-and-drop, map popups, and delivery dialogs until they are needed. See [the rebuild notes](docs/REBUILD.md) for the implementation and current measurements; the Lighthouse table below is historical.
+
 Mobile-first web app that demonstrates delivery route optimization for a package operation in **Madison, Wisconsin**. A **dispatcher** sees every stop on a map, runs the optimizer, gets three driver routes with before/after metrics and can reassign stops by hand; a **driver** picks their name, follows their route stop-by-stop on a phone, records each delivery with proof (how it was left, who took it, an optional note and photo), skips or fails what they cannot deliver, and finishes with an end-of-day report.
 
 The routing algorithm is a **swappable placeholder** (`nn-2opt-v1`: nearest-neighbour + 2-opt with time-window repair) behind a single API endpoint — the production algorithm drops into `POST /api/optimize` with zero UI changes. See [`docs/ALGORITHM_INTEGRATION.md`](docs/ALGORITHM_INTEGRATION.md).
@@ -57,7 +59,7 @@ pnpm generate-map-placeholder  # regenerate public/map-placeholder.{svg,webp} (n
 pnpm precompute-paths   # (optional, one-off) refresh src/data/paths.json from the OSRM demo server
 ```
 
-**Judging load speed: use `pnpm preview`, not `pnpm dev`.** `next dev` ships unminified, unsplit JavaScript with the dev overlay and hot-reload machinery attached — 3.7–4.7 MB per page here, five to eight times what the production build sends, and it compiles each route the first time you open it. It will always feel slow, and none of that reflects what a visitor gets. `pnpm preview` (build + serve on <http://localhost:3000>) is the build that gets deployed; measure that.
+**Measure load speed with `pnpm preview`.** This builds and serves the optimized app at <http://localhost:3000>. `pnpm dev` includes debugging tools and compiles routes on demand, so its first-load timing is not representative of the production build. Repeatable mobile measurements are available with `node scripts/performance.mjs http://localhost:3000 current`.
 
 The demo state (optimized routes, delivery progress and proof, the activity log, last driver) lives in `localStorage` under `routeiq-v1` and is kept in sync between open tabs on the same device (a driver's "Delivered" shows up in the dispatcher tab); use **Reset demo** in the dispatcher (or clear site data) to start over. A corrupt or blocked `localStorage` never blocks the app — it starts from defaults.
 

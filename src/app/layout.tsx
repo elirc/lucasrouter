@@ -1,16 +1,10 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter } from 'next/font/google';
 import type { ReactNode } from 'react';
 
 import { RegisterSW } from '@/components/RegisterSW';
 
 import './globals.css';
 
-const inter = Inter({
-  variable: '--font-inter',
-  subsets: ['latin'],
-  display: 'swap',
-});
 
 export const metadata: Metadata = {
   title: 'RouteIQ — Delivery Route Optimizer',
@@ -41,7 +35,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en">
       {/* No tile preconnect here: the landing and driver-picker pages never show
           a map, and an unused preconnect only takes bandwidth and a socket from
           the requests they do need. MapSkeleton opens the connection instead, so

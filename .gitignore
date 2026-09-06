@@ -42,3 +42,6 @@ next-env.d.ts
 
 # local e2e artifacts
 /e2e-screens/
+
+.vercel
+.env*

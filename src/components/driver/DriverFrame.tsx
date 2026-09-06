@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import './driver.css';
 
 import { cn } from '@/lib/cn';
 
@@ -16,7 +17,7 @@ export function DriverFrame({ children, className }: DriverFrameProps) {
   return (
     <div
       className={cn(
-        'mx-auto flex min-h-dvh w-full max-w-[480px] flex-col bg-slate-100',
+        'driver-frame mx-auto flex min-h-dvh w-full max-w-[480px] flex-col bg-slate-100',
         'md:border-x md:border-slate-200 md:shadow-sm',
         className,
       )}

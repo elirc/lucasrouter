@@ -438,6 +438,11 @@ try {
   await sleep(600);
   const deskText = await desk.evaluate(() => document.body.innerText);
   check('desktop dispatch: side panel with metrics + drivers', /Baseline/.test(deskText) && /Maya Thompson/.test(deskText));
+  // Route cards now start with only the first route expanded. Open each
+  // remaining card before checking every stop's drag and completed-state controls.
+  const collapsedRoutes = await desk.$$('section[aria-label="Driver routes"] button[aria-expanded="false"]');
+  for (const toggle of collapsedRoutes) await toggle.click();
+  await waitFor(desk, () => document.querySelectorAll('button[aria-label^="Drag to reorder"]').length === 45, { label: 'expanded route drag handles' });
   const grips = await desk.evaluate(() => document.querySelectorAll('button[aria-label^="Drag to reorder"]').length);
   check('desktop dispatch: drag handles rendered', grips >= 40, `${grips} handles`);
   const doneRow = await desk.evaluate((id) => {
