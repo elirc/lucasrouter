@@ -485,17 +485,42 @@ describe('delivery records', () => {
 
   it('drops the photo (but keeps the record) once the photo budget is spent', async () => {
     const { store, storage } = await optimizedStore();
-    const mod = await import('@/store/useAppStore');
     const [a, b] = store.getState().routes![0].stopIds;
-    const big = 'x'.repeat(mod.PHOTO_BUDGET_BYTES - 100);
+    // Tied to the real budget: if PHOTO_BUDGET_BYTES changes, this test still spends it.
+    const { PHOTO_BUDGET_BYTES } = await import('@/store/useAppStore');
+    const big = `data:image/jpeg;base64,${'A'.repeat(PHOTO_BUDGET_BYTES - 40)}`;
     expect(store.getState().recordDelivery(a, { method: 'handed', photo: big }).photoDropped).toBe(false);
-    const second = store.getState().recordDelivery(b, { method: 'door', photo: 'x'.repeat(200) });
+    const second = store.getState().recordDelivery(b, { method: 'door', photo: 'data:image/jpeg;base64,AAAA' });
     expect(second).toEqual({ ok: true, photoDropped: true });
     // The delivery still happened; only the picture is missing.
     expect(stopOf(store, b).status).toBe('delivered');
     expect(stopOf(store, b).proof?.photo).toBeUndefined();
     expect(log(store)[1].hasPhoto).toBeUndefined();
     expect(storage.getItem(KEY)).toContain('"deliveryLog"');
+  });
+
+  it('drops malformed optional proof fields and bounds failure notes at the store boundary', async () => {
+    const { store } = await optimizedStore();
+    const id = store.getState().routes![0].stopIds[0];
+    const result = store.getState().recordDelivery(id, {
+      method: 'invalid' as never,
+      recipientName: 42 as never,
+      note: 'x'.repeat(700),
+      photo: 'https://invalid.example/photo.jpg',
+    });
+    expect(result.ok).toBe(true);
+    expect(stopOf(store, id).proof).toMatchObject({ note: 'x'.repeat(500) });
+    expect(stopOf(store, id).proof?.method).toBeUndefined();
+    expect(stopOf(store, id).proof?.photo).toBeUndefined();
+
+    const other = store.getState().routes![0].stopIds[1];
+    expect(store.getState().recordFailure(other, 'not-a-reason' as never, 42 as never)).toBe(false);
+    expect(stopOf(store, other).status).toBe('pending');
+    expect(log(store)).toHaveLength(1);
+
+    expect(store.getState().recordFailure(other, 'Other', 'n'.repeat(700))).toBe(true);
+    expect(stopOf(store, other).proof?.note).toHaveLength(500);
+    expect(log(store)[1]).toMatchObject({ type: 'failed', note: 'n'.repeat(500) });
   });
 
   it('recordFailure() keeps the reason-in-notes mechanism and adds a note + event', async () => {

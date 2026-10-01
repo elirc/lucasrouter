@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+const subject = await import(process.argv.includes('--reference') ? '../../_answers/a.mjs' : './exercise.mjs');
+const {edit,undo}=subject;
+const base=()=>[{id:'A',version:4,value:'Alpha'},{id:'B',version:2,value:'Beta'}];
+test('edit then undo advances versions',()=>{const x=edit(base(),{id:'A',expectedVersion:4,value:'Depot'});assert.equal(x.rows[0].version,5);const y=undo(x.rows,x.token);assert.deepEqual(y.rows[0],{id:'A',version:6,value:'Alpha'});});
+test('stale token cannot overwrite newer edit',()=>{const x=edit(base(),{id:'A',expectedVersion:4,value:'Depot'});const y=edit(x.rows,{id:'A',expectedVersion:5,value:'Dock'});assert.equal(undo(y.rows,x.token).status,'conflict');});
+test('unrelated edit survives undo',()=>{const x=edit(base(),{id:'A',expectedVersion:4,value:'Depot'});const y=edit(x.rows,{id:'B',expectedVersion:2,value:'Shop'});const z=undo(y.rows,x.token);assert.equal(z.rows[1],y.rows[1]);assert.equal(z.rows[1].value,'Shop');});
+test('missing and conflict do not replace collection',()=>{const b=base();assert.equal(edit(b,{id:'X',expectedVersion:0,value:'x'}).rows,b);assert.equal(edit(b,{id:'A',expectedVersion:1,value:'x'}).status,'conflict');});
+test('input and unrelated identity remain unchanged',()=>{const b=Object.freeze(base().map(Object.freeze));const x=edit(b,{id:'A',expectedVersion:4,value:'x'});assert.equal(b[0].value,'Alpha');assert.equal(x.rows[1],b[1]);});
+test('same value still advances revision and token cannot be reused',()=>{const x=edit(base(),{id:'A',expectedVersion:4,value:'Alpha'});const y=undo(x.rows,x.token);assert.equal(undo(y.rows,x.token).status,'conflict');});

@@ -69,7 +69,6 @@ import { create } from 'zustand';
 import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware';
 
 import { getSeed } from '@/data';
-import { isFailureReason, sanitizeDeliveryNote, sanitizeDeliveryProof } from '@/lib/deliveryValidation';
 import { baseline } from '@/lib/optimizer/baseline';
 import { schedule } from '@/lib/optimizer/schedule';
 import type {
@@ -902,17 +901,16 @@ export const useAppStore = create<AppState>()(
 
         const now = new Date();
         const at = now.toISOString();
-        const safeProof = sanitizeDeliveryProof(proof);
-        const photo = trimmed(safeProof.photo);
+        const photo = trimmed(proof?.photo);
         // Keep the persisted blob inside its budget: the delivery is recorded
         // either way, only the picture is sacrificed (the caller toasts).
         const photoDropped =
           photo !== undefined && photoBytesInUse(state.stops) + photo.length > PHOTO_BUDGET_BYTES;
         const stored: DeliveryProof = { at };
-        if (safeProof.method) stored.method = safeProof.method;
-        const recipientName = trimmed(safeProof.recipientName);
+        if (proof?.method) stored.method = proof.method;
+        const recipientName = trimmed(proof?.recipientName);
         if (recipientName) stored.recipientName = recipientName;
-        const note = trimmed(safeProof.note);
+        const note = trimmed(proof?.note);
         if (note) stored.note = note;
         if (photo && !photoDropped) stored.photo = photo;
 
@@ -939,8 +937,8 @@ export const useAppStore = create<AppState>()(
 
       recordFailure(stopId, reason, note): boolean {
         const state = get();
-        if (!state.stops.some((s) => s.id === stopId) || !isFailureReason(reason)) return false;
-        const trimmedNote = sanitizeDeliveryNote(note);
+        if (!state.stops.some((s) => s.id === stopId)) return false;
+        const trimmedNote = trimmed(note);
         // The reason still goes into `notes` (unchanged mechanism, #25); the
         // free-text note rides along on `proof` so the dispatcher sees it too.
         state.setStopStatus(stopId, 'failed', reason);

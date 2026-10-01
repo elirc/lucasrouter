@@ -163,3 +163,7 @@ What keeps `/dispatch` fast: the Leaflet chunk is preloaded in parallel with hyd
 - Map tiles come from `tile.openstreetmap.org` under the OSM tile usage policy (attribution included, default zoom levels).
 - Road-shaped route lines are drawn from `src/data/paths.json`, precomputed once from the public OSRM demo server; the app itself never calls OSRM.
 - PWA: `manifest.webmanifest` (with dedicated maskable icons) + a minimal service worker (installable; offline caching intentionally minimal).
+
+## CRUD learning course
+
+Start with [astraupskill/README.md](astraupskill/README.md) for source-level walkthroughs, runtime validation examples, exercises and worked solutions. The [current verification record](astraupskill/VERIFICATION.md) covers 166 unit/store tests, 56 browser checks, type checking, lint and the default production build.

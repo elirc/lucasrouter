@@ -1,0 +1,15 @@
+# Codebase map: one delivery mutation
+
+Source links: [`src/lib/types.ts`](../src/lib/types.ts), [`src/store/useAppStore.ts`](../src/store/useAppStore.ts), [`src/lib/deliveryValidation.ts`](../src/lib/deliveryValidation.ts), and [`src/components/driver/report.ts`](../src/components/driver/report.ts).
+
+## Reading exercise with evidence
+
+Use search for `recordDelivery`, `recordFailure`, `deliveryLog`, and `partialize`. For each match classify read, write, or audit use. The action’s `set` callback is the atomic unit: it maps the stop collection and appends the event in one state update. `report.ts` later sorts events chronologically and removes outcomes after undo. This explains why event copies are necessary when routes can be reassigned after an attempt.
+
+Start at the driver delivery sheet. It collects an optional method, recipient name, note, and photo, then calls the store action `recordDelivery(stopId, proof)`. The action lives in `src/store/useAppStore.ts`, alongside `recordFailure`, `undoStop`, and `deferStop`. It finds the stop, stamps one ISO timestamp, creates a delivery event, updates the stop status and proof, and lets Zustand persist the durable slice. This is the write boundary because dispatcher and driver components can share it and because localStorage receives the result after the state update.
+
+The domain contract is in `src/lib/types.ts`. `DeliveryProof` makes `at` required and the other fields optional. `DeliveryMethod` is a string union. These are useful editor guarantees, but a browser can still call the JavaScript function with `{ method: 'script' }`. The new `src/lib/deliveryValidation.ts` is a pure module between the action and the input. `sanitizeDeliveryProof` accepts `unknown`, checks object shape, trims text, bounds text length, keeps known methods, and keeps only image data URLs. `recordFailure` uses `isFailureReason` because a failure reason is an enum at the product boundary.
+
+The read side renders status from the store and activity rows from `deliveryLog`. `src/components/driver/report.ts` derives summaries and CSV/JSON exports from events, so preserving event shape matters. The existing store photo budget decides whether a valid photo can be retained; the validator does not duplicate that policy. Tests are under `tests/`, with aliases configured by `vitest.config.mts` and TypeScript. A useful reading order is `types.ts`, the form caller, the action, `deliveryValidation.ts`, then `report.ts` and `store.test.ts`. For a change map, record each input, state write, persisted field, and consumer before editing.
+
+Exercise: identify every caller of `recordDelivery` and explain why validating only in the visible delivery sheet would leave another caller unsafe. Then list which fields are allowed to survive into `DeliveryProof`.

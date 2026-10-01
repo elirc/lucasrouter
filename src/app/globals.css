@@ -1,4 +1,5 @@
-@import "tailwindcss";
+/* Scan application source, not learning snapshots or dependency artifacts. */
+@import "tailwindcss" source("../");
 
 /*
  * System typography is immediately available, with no font request on startup.

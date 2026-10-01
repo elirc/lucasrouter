@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+const subject = await import(process.argv.includes('--reference') ? '../_interviewer/reference.mjs' : './exercise.mjs');
+const {mergeUpdates:f}=subject;const row=(id,version,status='pending')=>({id,version,status});
+test('newer known update replaces the row',()=>assert.equal(f([row('a',1)],[row('a',2,'done')]).rows[0].status,'done'));
+test('older completion cannot reverse a newer accepted version',()=>assert.equal(f([row('a',1)],[row('a',3,'done'),row('a',2)]).rows[0].version,3));
+test('equal revision is ignored even with different content',()=>assert.deepEqual(f([row('a',2)],[row('a',2,'done')]).ignored,['a']));
+test('unknown identity is not inserted',()=>assert.deepEqual(f([],[row('x',1)]),{rows:[],ignored:['x']}));
+test('original order survives a reordered update stream',()=>assert.deepEqual(f([row('b',1),row('a',1)],[row('a',2),row('b',2)]).rows.map(x=>x.id),['b','a']));
+test('unchanged record identity and input remain intact',()=>{const r=Object.freeze(row('a',1));const rows=Object.freeze([r]);const out=f(rows,[]);assert.notEqual(out.rows,rows);assert.equal(out.rows[0],r);});
+test('every ignored delivery is represented',()=>assert.deepEqual(f([row('a',2)],[row('a',1),row('a',2)]).ignored,['a','a']));

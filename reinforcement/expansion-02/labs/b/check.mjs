@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+const subject = await import(process.argv.includes('--reference') ? '../../_answers/b.mjs' : './exercise.mjs');
+const {nextTarget:n}=subject;const items=Object.freeze([{id:'A',disabled:false},{id:'B',disabled:true},{id:'C',disabled:false}].map(Object.freeze));
+test('skips disabled target',()=>assert.equal(n(items,'A','next'),'C'));
+test('wraps in both directions',()=>{assert.equal(n(items,'C','next'),'A');assert.equal(n(items,'A','previous'),'C');});
+test('missing or disabled current has explicit fallback',()=>{assert.equal(n(items,'B','next'),'A');assert.equal(n(items,'X','previous'),'C');});
+test('first and last ignore current',()=>{assert.equal(n(items,'C','first'),'A');assert.equal(n(items,'A','last'),'C');});
+test('empty or all disabled yields null',()=>{assert.equal(n([],null,'next'),null);assert.equal(n([{id:'A',disabled:true}],null,'last'),null);});
+test('unknown command is rejected even on empty input',()=>assert.throws(()=>n([],null,'down'),RangeError));

@@ -1,0 +1,120 @@
+{
+  "passed": true,
+  "total": 222,
+  "passedTests": 222,
+  "failed": 0,
+  "notExecuted": 0,
+  "counting": "166 unit/store tests plus 56 original browser smoke assertions; typecheck, lint and build are additional gates, not added to the case count.",
+  "testRun": {
+    "command": [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "--maxWorkers=1",
+      "--testTimeout=30000",
+      "--reporter=json",
+      "--outputFile=C:/Users/Owner/Desktop/AstraOrganized2/astra-remaining-improvements/checks/lucasrouter/test-final-01-results.json"
+    ],
+    "cwd": "C:\\Users\\Owner\\Desktop\\AstraOrganized2\\astra-remaining-improvements\\stage\\52d78d4a92a2",
+    "startedAt": "2026-09-12T17:03:40.783578+00:00",
+    "status": "complete",
+    "log": "test-final-01.log",
+    "pid": 3256,
+    "exitCode": 0,
+    "passed": true,
+    "finishedAt": "2026-09-12T17:04:16.095675+00:00",
+    "elapsedSeconds": 35.31
+  },
+  "typecheckRun": {
+    "command": [
+      "node",
+      "node_modules/typescript/bin/tsc",
+      "--noEmit"
+    ],
+    "cwd": "C:\\Users\\Owner\\Desktop\\AstraOrganized2\\astra-remaining-improvements\\stage\\52d78d4a92a2",
+    "startedAt": "2026-09-12T17:01:23.536518+00:00",
+    "status": "complete",
+    "log": "typecheck-final-01.log",
+    "pid": 18376,
+    "exitCode": 0,
+    "passed": true,
+    "finishedAt": "2026-09-12T17:02:38.533497+00:00",
+    "elapsedSeconds": 75.0
+  },
+  "lintRun": {
+    "command": [
+      "node",
+      "node_modules/eslint/bin/eslint.js",
+      ".",
+      "--max-warnings=0"
+    ],
+    "cwd": "C:\\Users\\Owner\\Desktop\\AstraOrganized2\\astra-remaining-improvements\\stage\\52d78d4a92a2",
+    "startedAt": "2026-09-12T17:03:40.691145+00:00",
+    "status": "complete",
+    "log": "lint-final-02.log",
+    "pid": 7372,
+    "exitCode": 0,
+    "passed": true,
+    "finishedAt": "2026-09-12T17:04:55.643876+00:00",
+    "elapsedSeconds": 74.95
+  },
+  "buildRun": {
+    "command": [
+      "node",
+      "node_modules/next/dist/bin/next",
+      "build"
+    ],
+    "cwd": "C:\\Users\\Owner\\Desktop\\AstraOrganized2\\astra-remaining-improvements\\stage\\52d78d4a92a2",
+    "startedAt": "2026-09-12T17:05:13.400147+00:00",
+    "status": "complete",
+    "log": "build-scoped-01.log",
+    "pid": 16120,
+    "exitCode": 0,
+    "passed": true,
+    "finishedAt": "2026-09-12T17:07:13.999397+00:00",
+    "elapsedSeconds": 120.6
+  },
+  "browserRun": {
+    "startedAt": "2026-09-12T17:07:47.065387+00:00",
+    "baseUrl": "http://127.0.0.1:50637",
+    "passed": true,
+    "serverPid": 32872,
+    "command": [
+      "node",
+      "scripts/smoke-e2e.mjs",
+      "http://127.0.0.1:50637"
+    ],
+    "exitCode": 0,
+    "passedChecks": 56,
+    "failedChecks": 0,
+    "stopExitCode": 0,
+    "ownedServerStopped": true,
+    "elapsedSeconds": 66.03
+  },
+  "rawTests": "C:\\Users\\Owner\\Desktop\\AstraOrganized2\\astra-remaining-improvements\\checks\\lucasrouter\\test-final-01-results.json",
+  "images": [
+    {
+      "file": "images/dispatch-desktop.png",
+      "source": "C:\\Users\\Owner\\Desktop\\AstraOrganized2\\astra-remaining-improvements\\stage\\52d78d4a92a2\\e2e-screens\\09-dispatch-desktop.png",
+      "sha256": "4f9de13eee484b3b84453dd40a29626ce9fd11c7faa2dc7fca50b08cbece847c",
+      "viewport": "1366x850, DPR 1",
+      "reviewed": true,
+      "review": "Viewed desktop map/routes and mobile driver controls; layout and typography readable, expected scrolling, no missing style presentation."
+    },
+    {
+      "file": "images/driver-mobile.png",
+      "source": "C:\\Users\\Owner\\Desktop\\AstraOrganized2\\astra-remaining-improvements\\stage\\52d78d4a92a2\\e2e-screens\\07-driver-D2-mobile.png",
+      "sha256": "c5f583693cc060e1dc997fbed264291c7df8c6445ff70417c147e1624566f66d",
+      "viewport": "375x812, DPR 2",
+      "reviewed": true,
+      "review": "Viewed desktop map/routes and mobile driver controls; layout and typography readable, expected scrolling, no missing style presentation."
+    }
+  ],
+  "environment": "Windows; Node 22.16.0; Next 16.3.1; React 19.2.8; TypeScript 5.9.3; Vitest 4.1.10; Tailwind 4.3.3; installed local browser selected by the original Puppeteer smoke script",
+  "limits": [
+    "This remains a browser-local demonstration with no authentication, tenant authorization or transactional server database.",
+    "Photo validation checks data URL structure and existing storage budget; it does not decode image pixels or validate MIME contents.",
+    "The final successful build uses the default Turbopack command after scoping Tailwind to src. Earlier unscoped Turbopack and Webpack attempts failed and remain recorded.",
+    "The final checks used the installed staged dependency tree. Root independently captured tests, typecheck, lint, production build and browser smoke, but did not recapture a clean pnpm installation."
+  ]
+}
