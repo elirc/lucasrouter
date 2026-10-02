@@ -167,3 +167,7 @@ What keeps `/dispatch` fast: the Leaflet chunk is preloaded in parallel with hyd
 ## CRUD learning course
 
 Start with [astraupskill/README.md](astraupskill/README.md) for source-level walkthroughs, runtime validation examples, exercises and worked solutions. The [current verification record](astraupskill/VERIFICATION.md) covers 166 unit/store tests, 56 browser checks, type checking, lint and the default production build.
+
+## Upskilling course
+
+[upskill/LEARNING-PATH.md](upskill/LEARNING-PATH.md) is the path through this repo's optimizer and its replacement contract: a [code tour](upskill/CODE-TOUR.md) of the swappability promise end to end, [break-and-observe exercises](upskill/EXERCISES.md) anchored to the vitest suite, and a worked example with real captured output. It sequences the other learning folders (`learn/`, `training/`, `astraupskill/`, `reinforcement/`, `dfableandopus/`) around that central question rather than replacing them.
