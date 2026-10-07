@@ -4,8 +4,9 @@ Do these before any ladder ticket or incident. Each takes 5–20 minutes. **Pred
 code, a Node REPL, the browser console, or a test). Sealed answers: `learn/_answers/00-onramp.md`. Open them only after you've written
 all your answers for a group (1–5, then 6–10).
 
-Read the committed version of a file with `git show HEAD:<path>` if your working copy has uncommitted changes (it does for
-`src/store/useAppStore.ts`). Exercises 8 and (optionally) 2 run code: `pnpm install --frozen-lockfile` first, because `node_modules` was removed.
+Read the committed version of a file with `git show HEAD:<path>` if your working copy has uncommitted changes. Exercises 8 and (optionally) 2
+run code: `pnpm install --frozen-lockfile` first. Exercise 1 can also be checked without installing anything:
+`node --experimental-strip-types -e "import('./src/lib/time.ts').then(t => console.log(t.to12h('25:13')))"` (Node 22.6+; `time.ts` has no imports).
 
 ---
 
@@ -87,13 +88,13 @@ Which one of these surprises you most? (Keep your answer to (g). Ladder J3 build
 3. Run it: `pnpm exec vitest run tests/time-characterization.test.ts`. Then break `formatWindow` on purpose (for example, always return the
    full strings) and confirm your test goes red. Revert.
 4. Decide: is this a bug users can hit today? (Where do time windows come from, and what does the API allow for their hours?)
-See [curriculum 04](../../opusorganize/apprenticeship/curriculum/04-characterization-tests.md) for why you pin before you fix.
+See curriculum 04 (portfolio apprenticeship curriculum, not in this repo) for why you pin before you fix.
 
 ## 9. Find the live region (`src/components/ui/Toast.tsx`)
 Answer from the code, then confirm in Chrome DevTools → Accessibility pane on an idle `/dispatch` (production or dev build):
 1. Which element has `role="status"` and `aria-live="polite"`?
 2. Is that element in the DOM **when no toast is showing**? Why does that matter to a screen reader?
-   ([curriculum 11](../../opusorganize/apprenticeship/curriculum/11-accessibility-essentials.md), check 3.)
+   (curriculum 11 (portfolio apprenticeship curriculum, not in this repo), check 3.)
 3. Why does the card carry `key={shown.id}`? What happens to the card DOM node when a second toast replaces the first?
 4. The action button calls `dismissToast()` **before** `run?.()`. What bug does that order prevent?
 

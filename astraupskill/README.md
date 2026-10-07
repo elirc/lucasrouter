@@ -2,7 +2,7 @@
 
 ## How to use the repository
 
-Open the source in this order: `src/lib/types.ts` defines the domain; `src/components/driver/DeliverySheet.tsx` collects user input; `src/store/useAppStore.ts` owns mutations and persistence; `src/lib/deliveryValidation.ts` is the new runtime boundary; `src/components/driver/report.ts` consumes events. The exact pre-change extract is preserved at [`docs/original/store-before-validation.md`](snapshots/useAppStore.ts.txt). It is deliberately noncompiling teaching material, because it shows the old trust boundary without becoming an accidental second implementation.
+Open the source in this order: `src/lib/types.ts` defines the domain; `src/components/driver/DeliverySheet.tsx` collects user input; `src/store/useAppStore.ts` owns mutations and persistence; `src/lib/deliveryValidation.ts` is the new runtime boundary; `src/components/driver/report.ts` consumes events. The pre-change store is preserved at [`astraupskill/snapshots/useAppStore.ts.txt`](snapshots/useAppStore.ts.txt). It has a `.txt` extension so TypeScript, lint and Vitest never pick it up as a second implementation; diff it against `src/store/useAppStore.ts` to see the old trust boundary.
 
 Keep a two-column notebook while reading. In the left column write “input and policy”; in the right write “state and consumer.” For a photo, format policy belongs to the validator, byte capacity belongs to the store, and display/export behavior belongs to the driver components. For a failure reason, vocabulary is a command precondition, so rejection must happen before the first setter. This division is the main junior-to-mid transition in the exercise: you learn to place logic by invariant and ownership rather than by whichever component is easiest to edit.
 

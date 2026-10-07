@@ -2,7 +2,7 @@
 
 Four drills that turn existing `training/` material into practice at **directing** a coding agent and **refusing to trust it** until you've verified.
 The full M1 loop lives in `training/agentic/WORKFLOW.md`. Do these drills first; they're smaller. Concept page:
-[curriculum 05: verify before trust](../../opusorganize/apprenticeship/curriculum/05-verify-before-trust.md).
+curriculum 05: verify before trust (portfolio apprenticeship curriculum, not in this repo).
 
 Rubrics and the traps each agent tends to fall into are sealed in `learn/_answers/01-agentic-practice.md`. Read them only after your review.
 
@@ -10,13 +10,14 @@ Rubrics and the traps each agent tends to fall into are sealed in `learn/_answer
 1. **Diagnose by hand.** Reproduce the symptom and write the causal chain in `training/_work/<drill>-diagnosis.md`. No agent in this step.
 2. **Write the spec** in `training/_work/<drill>-spec.md`: the goal with a check that proves it, allowed and forbidden changes, the tests that must
    stay green, and the one new test that must go red → green. The agent gets this file verbatim.
-3. **Run the agent** in a worktree on the incident branch (or a branch off `main` for ladder work). Tell it: "One commit per causal change.
+3. **Run the agent** in a worktree on a branch off `main` (for incidents, a scratch branch where you re-injected the regression: the
+   `training/incidents/*` branches were never pushed, see `learn/README.md`). Tell it: "One commit per causal change.
    Run `pnpm verify` after each. Don't claim a number you didn't measure; write 'unmeasured'."
 4. **Adversarial review.** Read the whole diff yourself. Optionally have a second model review it with the prompt in `training/agentic/WORKFLOW.md` step 3.
 5. **Verify yourself** with the checklist at the bottom. Agent-reported results don't count.
 6. **Grade** against the sealed rubric. Write one line on what the agent got wrong and how you caught it (or didn't).
 
-Setup for every drill: `pnpm install --frozen-lockfile` in the worktree (node_modules was removed). Production builds take about 4 minutes. Remove
+Setup for every drill: `pnpm install --frozen-lockfile` in the worktree. Production builds take about 4 minutes. Remove
 worktrees with `git worktree remove`, never with a recursive delete.
 
 ---
@@ -33,7 +34,7 @@ the unchanged error shape `{ error, issues: [] }`; what the 500 branch returns (
 `docs/ALGORITHM_INTEGRATION.md` updated.
 
 ## Drill B · Restore modality in the driver sheets (INC-003) · 90 min
-**Source:** `training/incidents/003-driver-sheet-keyboard.md`, worktree on `training/incidents/003-driver-sheet-keyboard`.
+**Source:** `training/incidents/003-driver-sheet-keyboard.md`; the `training/incidents/003-driver-sheet-keyboard` branch is not on GitHub, so re-inject the regression on a scratch branch.
 **You by hand:** reproduce all three driver reports with the keyboard on `/driver/D1` (production build). Check
 `document.querySelector('dialog[open]').matches(':modal')` in the console on `main` and on the branch. Write the table "what `showModal()` gives
 you that `show()` doesn't" and map each row to a report. Then pick how to solve the **original** QA problem (the Undo toast hidden behind an
@@ -46,7 +47,7 @@ http://localhost:3111 b --only=sheet` must print `closedByEscape/focusReturned/m
 (see the sealed answer). Keyboard pass on all three sheets (`DeliverySheet`, `FailReasonSheet`, `StopDetailsSheet`).
 
 ## Drill C · Typing lag after the map highlight (INC-004) · 90 min
-**Source:** `training/incidents/004-search-highlight.md`, worktree on `training/incidents/004-search-highlight`.
+**Source:** `training/incidents/004-search-highlight.md`; the `training/incidents/004-search-highlight` branch is not on GitHub, so re-inject the regression on a scratch branch.
 **You by hand:** take the probe typing numbers on `main` and the branch in one session (`--only=typing --cpu=4`). Record a React Profiler session
 while typing 5 characters (dev build) and list every component that renders per keystroke on each build. Find the one line whose position
 causes it.
@@ -58,7 +59,7 @@ markers whose dimmed state flips may re-render; the input stays urgent (`useDefe
 stable prop), not the query string. A memo on a component whose prop changes on every keystroke is pure overhead.
 
 ## Drill D · Keep the landing page static (INC-001) · 75 min
-**Source:** `training/incidents/001-landing-bundle.md`, worktree on `training/incidents/001-landing-bundle`.
+**Source:** `training/incidents/001-landing-bundle.md`; the `training/incidents/001-landing-bundle` branch is not on GitHub, so re-inject the regression on a scratch branch.
 **You by hand:** after `pnpm build`, list the `<script src>` entries in `.next/server/app/index.html` on `main` and on the branch. Search the new
 chunk for `routeiq-v1` or a seed address to name the modules. Read the store module's top-level statements and list what now **runs** on `/`.
 **Your spec must pin down:** the counter stays; `/` must not import `@/store/*` (directly or through a component); the hydration-critical script list

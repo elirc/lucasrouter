@@ -12,30 +12,31 @@ It is the portfolio's **frontend performance + accessibility lab**: the only rep
 on production builds, and where you find bugs with a keyboard and a screen reader instead of a unit test (see `training/README.md`).
 
 ## Before you run anything
-- `node_modules` was removed to free disk space. Run **`pnpm install --frozen-lockfile`** once in the repo root before any session that
-  runs code (the lockfile is `pnpm-lock.yaml`; don't use `npm install`). Each incident worktree needs its own install too.
-- The working tree has **your own uncommitted work** (the delivery-validation change: `src/lib/deliveryValidation.ts`,
-  `src/store/useAppStore.ts`, `tests/delivery-validation.test.ts`, and the `astraupskill/`, `dfableandopus/` trees). Don't stash or reset it
-  to do these exercises. Line numbers in this guide refer to the committed `main` (`git show HEAD:<file>`), which can differ from your
-  working copy of `useAppStore.ts` by a few lines. Search by function name.
-- Incidents live on branches. Use `git worktree add ..\lr-inc-002 training/incidents/002-toast-announcements`, and remove it with
-  `git worktree remove ..\lr-inc-002`. **Never** delete a worktree folder with a recursive delete: `node_modules` inside it can be a
-  junction into real data (portfolio rule after a real data-loss incident).
-- A production build takes about 4 minutes on this laptop. Performance numbers are only comparable within one session on one machine.
+- Run **`pnpm install --frozen-lockfile`** once in the repo root before any session that runs code (the lockfile is `pnpm-lock.yaml`;
+  don't use `npm install`). Each worktree needs its own install too.
+- The delivery-validation change (`src/lib/deliveryValidation.ts`, the store guard, `tests/delivery-validation.test.ts`, and the
+  `astraupskill/`, `dfableandopus/` trees) is now committed on `main` (commit `e1e05c2`), so `git show HEAD:<file>` and your working copy agree.
+  This guide names functions rather than line numbers; search by function name.
+- **The incident branches are not on GitHub.** `training/` describes each incident as a branch `training/incidents/NNN-*` (with commits such
+  as `4c9f7e1`), but as of 2026-10-06 `origin` has only `main` and those commits are not in its history. On a fresh clone, the
+  `git worktree add ... training/incidents/...` commands fail. Use each brief as a case study: reproduce the regression yourself on a scratch
+  branch off `main` from the brief's description, or read the brief plus `training/_answers/incident-NNN.md`. Remove any worktree with
+  `git worktree remove`, never with a recursive delete (a `node_modules` junction inside it can point at real data).
+- A production build took about 4 minutes on the author's laptop. Performance numbers are only comparable within one session on one machine.
 
 ## Prerequisites (fundamentals to have first)
 Read each one before the session that needs it. The central pages are short. Don't skip the "worked examples" part, which points back here.
 1. **React rendering: what makes a component re-render** (state, props identity, parent re-render, context/store subscription). Read
    `training/navigation/FIRST_CHANGE.md` items 3–4 and the "SELECTOR NOTE" at the top of `src/store/useAppStore.ts`. On-ramp 5 checks it.
 2. **Server vs client components in the App Router** (`'use client'` boundary, why `src/app/layout.tsx` refuses to render `<Toast />`).
-   Read the comment at the bottom of `src/app/layout.tsx` and DECISIONS #34. Then [curriculum 12: frontend performance](../../opusorganize/apprenticeship/curriculum/12-frontend-performance.md).
-3. **Accessibility basics: keyboard, focus, live regions, contrast.** [curriculum 11: accessibility](../../opusorganize/apprenticeship/curriculum/11-accessibility-essentials.md).
+   Read the comment at the bottom of `src/app/layout.tsx` and DECISIONS #34. Then curriculum 12: frontend performance (portfolio apprenticeship curriculum, not in this repo).
+3. **Accessibility basics: keyboard, focus, live regions, contrast.** curriculum 11: accessibility (portfolio apprenticeship curriculum, not in this repo).
    Then read `src/components/ui/Toast.tsx` and the effect in `src/components/driver/DriverDialog.tsx` (`showModal()`).
-4. **Tests you can trust, especially for code you didn't write:** [curriculum 04: characterization tests](../../opusorganize/apprenticeship/curriculum/04-characterization-tests.md)
+4. **Tests you can trust, especially for code you didn't write:** curriculum 04: characterization tests (portfolio apprenticeship curriculum, not in this repo)
    and the style of `tests/api-optimize.test.ts` (route handlers called as plain functions).
-5. **Verifying agent output:** [curriculum 05: verify before trust](../../opusorganize/apprenticeship/curriculum/05-verify-before-trust.md).
+5. **Verifying agent output:** curriculum 05: verify before trust (portfolio apprenticeship curriculum, not in this repo).
    This is the rule behind every "delegate" line below.
-6. (Before the last session) **Release safety and gates:** [curriculum 13](../../opusorganize/apprenticeship/curriculum/13-release-safety.md),
+6. (Before the last session) **Release safety and gates:** curriculum 13 (portfolio apprenticeship curriculum, not in this repo),
    used by ladder S2.
 
 ## Study route (12 sessions, about 15 hours, then the long tickets)
@@ -51,7 +52,7 @@ coding agent with a spec you wrote, then verify it yourself with the checklist i
 | 5 | Baseline + blind review (90 min) | `training/tools/frontend-probe.mjs` on `main` (see its header), then `training/review/EXERCISE.md` + `COMPARE.md` | The review itself, and choosing what to probe | Have an agent write a small script that prints the probe JSON as a table. Read the script before running it | You saved a `main` baseline JSON, and at least 3 of your review findings have `file:line` evidence and match a finding in `_answers/review.md` |
 | 6 | Junior tickets (90 min) | `training/ladder/J1-overview-counts.md`, `training/ladder/J3-optimize-body-limits.md` | J1 completely (it's small, do it all). For J3: answer "Explain before touching", write the spec | J3's implementation (drill A in `learn/01-agentic-practice.md`) | J1: your pure function + tests are green. J3: the drill A rubric scores ≥ 8/10 |
 | 7 | Component tests (90 min) | `training/ladder/J2-component-test-foundation.md` | Choose what to assert (the three Toast tests, the StopSearch test). Answer the four questions | Vitest project config + dev dependencies. Check that the node project still runs only `tests/**/*.test.ts` | `pnpm test` runs both projects. If test (c) fails on `main`, you wrote down what you saw instead of weakening it |
-| 8 | A11y incidents (90 min) | `training/incidents/002-toast-announcements.md`, `003-driver-sheet-keyboard.md` (worktrees + builds) | Reproduce both with the keyboard and DevTools' Accessibility pane. Write the causal explanation | The 003 fix (drill B), after your diagnosis is written | You can explain, without notes, why axe stayed green in 002, and list everything `showModal()` gives that `show()` doesn't |
+| 8 | A11y incidents (90 min) | `training/incidents/002-toast-announcements.md`, `003-driver-sheet-keyboard.md` (re-inject on a scratch branch; see "Before you run anything") | Reproduce both with the keyboard and DevTools' Accessibility pane. Write the causal explanation | The 003 fix (drill B), after your diagnosis is written | You can explain, without notes, why axe stayed green in 002, and list everything `showModal()` gives that `show()` doesn't |
 | 9 | Bytes and layout shift (90 min) | `training/incidents/001-landing-bundle.md`, `005-optimizer-status-strip.md` | Listing the critical `<script src>` of `/` from `.next/server/app/index.html`; finding the shifted nodes in the Performance panel | The 001 fix (drill D) | You can say which JS column in the 001 table matters and why, and name the node that moves in 005 |
 | 10 | Render storms (90 min) | `training/incidents/004-search-highlight.md`, then start `training/ladder/M1-marker-click-inp.md` via `training/agentic/WORKFLOW.md` | The Profiler trace and the list of components that render per keystroke. M1 steps 0–1 (baseline + spec) | The 004 fix (drill C); M1 steps 2–4 | Your before/after table for 004 comes from one session, and you wrote the M1 spec before any agent touched code |
 | 11 | The real toast bug + timing (90 min) | `training/ladder/M2-vanishing-toast.md`, then `training/ladder/J4-actionable-toast-timing.md` (added in this pass) | M2: the instrumented timeline and the failing test. J4: the WCAG reasoning | J4's implementation, after M2 is merged | Your M2 test is red on `main` and green with the fix; the probe shows the toast for about 3.7 s |
@@ -75,4 +76,4 @@ Follow `training/README.md` "Suggested order" for that part.
 
 **Next repo in the competency graph:** perch (B02 DRILL: two more frontend incidents and an existing a11y audit to read), then
 gitjira-app ladder M1 (frontend performance on a full-stack app with a real backend). See rows "Frontend performance",
-"Accessibility" and "Web / React / frontend testing" in `Desktop\opusorganize\apprenticeship\COMPETENCY_GRAPH.md`.
+"Accessibility" and "Web / React / frontend testing" in the portfolio's apprenticeship `COMPETENCY_GRAPH.md` (kept outside this repo).

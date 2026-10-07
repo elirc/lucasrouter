@@ -1,5 +1,7 @@
 # Verification and limits
 
+> Status note (2026-10-06): this records the original delivery run. A later review pass added the whitespace-photo validation test (see `dfableandopus/02-STORIES-AND-RESUME.md`), so `tests/` at HEAD holds 167 `it(` cases across 7 files (static count; the suite was not re-run for this note). The commands below are unchanged.
+
 The final delivery passed **166 unit/store tests and 56 browser smoke checks**, plus TypeScript checking, zero-warning lint and the normal production build. These are observed results from the staged application, not expected counts copied from a plan. [Machine-readable evidence](evidence.json) records commands, exits, durations, image hashes and central raw-report locations.
 
 ## Decision: a dropped photo is reported, not hidden

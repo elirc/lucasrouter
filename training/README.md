@@ -18,6 +18,13 @@ the app, and several numbers below were measured for this lab on 2026-09-24 (pro
 | `interview/` | stories, 20 questions, system design, mock defense script, 24 flashcards | `_answers/interview-technical.md` |
 | `tools/frontend-probe.mjs` | LCP/CLS/JS bytes, marker-click and typing INP proxy, live-region and dialog checks | – |
 
+> **Status note (checked 2026-10-06):** the `training/incidents/NNN-*` branches
+> were created locally and never pushed. GitHub has only `main`
+> (`git ls-remote --heads origin`), so the `git worktree add` command in step 4
+> fails on a fresh clone. Until those branches are published, use each brief's
+> "Suspect PR diff" to recreate the bug yourself on a scratch branch, and use
+> `_answers/incident-NNN.md` to check your diagnosis.
+
 ## Suggested order (~45–55 h)
 1. `navigation/FIRST_CHANGE.md` + `ARCHITECTURE.md` (2 h). Build and run the app. Run the probe on `main` once and keep the output.
 2. `review/EXERCISE.md` (1.5 h incl. COMPARE).
@@ -35,8 +42,8 @@ the app, and several numbers below were measured for this lab on 2026-09-24 (pro
 - `StopSearch`'s result-count live region mounts along with its text (review #4, ladder M3).
 
 ## Existing learning trees in this repo
-`astraupskill/` and `dfableandopus/` (both untracked) cover the delivery-proof **validation boundary** change that's sitting uncommitted in
-the working tree (`src/lib/deliveryValidation.ts`). They're backend/state-focused and complement this frontend lab. Use them for the
+`astraupskill/` and `dfableandopus/` cover the delivery-proof **validation boundary** change (`src/lib/deliveryValidation.ts`,
+committed in e1e05c2). They're backend/state-focused and complement this frontend lab. Use them for the
 "runtime validation" story. This lab doesn't duplicate them.
 
 Central concept pages: `C:\Users\Owner\Desktop\opusorganize\apprenticeship\curriculum\` (05 verify-before-trust is used by `agentic/`).
